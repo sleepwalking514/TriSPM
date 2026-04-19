@@ -3,7 +3,6 @@ Triton AOT compilation: vector_add kernel → LLVM IR for RISC-V.
 
 Env vars (set by build_kernel.sh via env.sh before this script runs):
   TRITON_CPU_AOT=1              — master AOT switch (compiler skips host passes)
-  TRITON_CPU_AOT_FEATURES       — target ISA features for type promotion
   KERNEL_AUX_FILE_DIR           — output directory for .llir and launcher files
 
 The Triton runtime writes <kernel_name>.llir and <kernel_name>_launcher.{c,h}
@@ -40,7 +39,7 @@ def vector_add(x_ptr, y_ptr, out_ptr,
 #   4. Generates a C launcher (grid dispatch) in the same directory
 #   5. Skips kernel execution (returns immediately)
 #
-# The caller (build_kernel.sh) then runs llc + gcc to produce a
+# The caller (build_kernel.sh) then runs llc + clang to produce a
 # RISC-V binary.
 
 x = torch.empty(SIZE, dtype=torch.float32)

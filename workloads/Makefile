@@ -3,9 +3,11 @@
 #
 # Usage:
 #   make vector_add          # build one kernel
-#   make run-vector_add      # build + run on gem5
 #   make all                 # build all kernels
-#   make run-all             # build + run all kernels
+#
+#   make run-vector_add      # run on gem5 (must build first)
+#   make run-all             # run all kernels on gem5
+#
 #   make clean               # remove all build artifacts
 #
 # To add a new kernel, create workloads/<name>/ with:
@@ -27,10 +29,8 @@ run-all: $(addprefix run-,$(KERNELS))
 $(KERNELS):
 	@./scripts/build_kernel.sh $@
 
-# Build + run on gem5 (default: cache baseline)
+# Run on gem5 (default: cache baseline). Build first with `make <kernel>`.
 $(addprefix run-,$(KERNELS)):
-	@./scripts/build_kernel.sh $(subst run-,,$@)
-	@echo ""
 	@./scripts/run_gem5.sh $(subst run-,,$@) --cache_baseline
 
 clean:
