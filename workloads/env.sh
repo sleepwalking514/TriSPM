@@ -11,6 +11,13 @@ if [ -z "${VIRTUAL_ENV:-}" ] && [ -f "$TRISPM_ROOT/compiler/.venv/bin/activate" 
     source "$TRISPM_ROOT/compiler/.venv/bin/activate"
 fi
 
+# ---------- SPM configuration (single source of truth) ----------
+# Override these to change SPM geometry for the entire pipeline:
+# compiler pass, runtime library, and gem5 simulator.
+export TRITON_SPM_BASE="${TRITON_SPM_BASE:-0x40000000}"
+export TRITON_SPM_SIZE="${TRITON_SPM_SIZE:-262144}"    # 256 KiB
+export SPM_SIZE_BYTES="${SPM_SIZE_BYTES:-$TRITON_SPM_SIZE}"
+
 # ---------- Triton AOT cross-compilation ----------
 # TRITON_CPU_AOT is the master switch: it gates the compilation pipeline
 # (skip host-specific passes), execution skip, LLIR saving, and launcher

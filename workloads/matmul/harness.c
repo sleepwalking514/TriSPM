@@ -65,21 +65,74 @@ int main(void)
     /* Launch Triton kernel over the 1-D grid. */
     matmul_launch(GRID_X, 1, 1, a, b, c);
 
-    /* Verify. */
+    /* Verify — print per-tile summary to locate which tiles fail. */
     int errors = 0;
     for (int i = 0; i < M * N; i++) {
         if (fabsf(c[i] - ref[i]) > 1e-3f) {
-            if (errors < 10)
-                printf("MISMATCH [%d]: got %.6f, expected %.6f\n",
-                       i, c[i], ref[i]);
+            if (errors < 20) {
+                int row = i / N, col = i % N;
+                int tm = row / BLOCK_SIZE_M, tn = col / BLOCK_SIZE_N;
+                printf("MISMATCH [%d] (r=%d,c=%d tile_m=%d,tile_n=%d): "
+                       "got %.6f, expected %.6f\n",
+                       i, row, col, tm, tn, c[i], ref[i]);
+            }
             errors++;
         }
     }
 
+    // /* Per-tile error summary with local-row/col detail for small error counts. */
+    // int ntm = (M + BLOCK_SIZE_M - 1) / BLOCK_SIZE_M;
+    // int ntn = (N + BLOCK_SIZE_N - 1) / BLOCK_SIZE_N;
+    // printf("\nTile error map (%dx%d tiles):\n", ntm, ntn);
+    // for (int tm = 0; tm < ntm; tm++) {
+    //     for (int tn = 0; tn < ntn; tn++) {
+    //         int terr = 0;
+    //         for (int lr = 0; lr < BLOCK_SIZE_M; lr++)
+    //             for (int lc = 0; lc < BLOCK_SIZE_N; lc++) {
+    //                 int r = tm * BLOCK_SIZE_M + lr;
+    //                 int cc = tn * BLOCK_SIZE_N + lc;
+    //                 if (r < M && cc < N) {
+    //                     int idx = r * N + cc;
+    //                     if (fabsf(c[idx] - ref[idx]) > 1e-3f)
+    //                         terr++;
+    //                 }
+    //             }
+    //         printf("  tile(%d,%d): %d/%d errors", tm, tn, terr,
+    //                BLOCK_SIZE_M * BLOCK_SIZE_N);
+    //         if (terr > 0 && terr <= 32) {
+    //             printf(" @[");
+    //             int first = 1;
+    //             for (int lr = 0; lr < BLOCK_SIZE_M; lr++)
+    //                 for (int lc = 0; lc < BLOCK_SIZE_N; lc++) {
+    //                     int r = tm * BLOCK_SIZE_M + lr;
+    //                     int cc = tn * BLOCK_SIZE_N + lc;
+    //                     if (r < M && cc < N) {
+    //                         int idx = r * N + cc;
+    //                         if (fabsf(c[idx] - ref[idx]) > 1e-3f) {
+    //                             if (!first) printf(",");
+    //                             printf("r%dc%d", lr, lc);
+    //                             first = 0;
+    //                         }
+    //                     }
+    //                 }
+    //             printf("]");
+    //         }
+    //         printf("\n");
+    //     }
+    // }
+
+    // /* Dump tile(0,0) row 14 for detailed analysis. */
+    // printf("\ntile(0,0) row 14 detail:\n");
+    // for (int j = 0; j < BLOCK_SIZE_N; j++) {
+    //     int idx = 14 * N + j;
+    //     printf("  [14][%d] got=%.6f ref=%.6f delta=%.6f\n",
+    //            j, c[idx], ref[idx], c[idx] - ref[idx]);
+    // }
+
     if (errors == 0)
-        printf("PASS: all %d elements correct\n", M * N);
+        printf("\nPASS: all %d elements correct\n", M * N);
     else
-        printf("FAIL: %d / %d mismatches\n", errors, M * N);
+        printf("\nFAIL: %d / %d mismatches\n", errors, M * N);
 
     free(a);
     free(b);

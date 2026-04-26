@@ -36,27 +36,31 @@ def matmul(a_ptr, b_ptr, c_ptr,
     pid_m = first_pid_m + (pid % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
-    # Row-major contiguous: stride_am=K, stride_ak=1, stride_bk=N, stride_bn=1
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
-
-    a_ptrs = a_ptr + (offs_am[:, None] * K + offs_k[None, :])
-    b_ptrs = b_ptr + (offs_k[:, None] * N + offs_bn[None, :])
+    # Block pointers: produce vector.transfer_read from memref, which the
+    # ConvertMemoryToSPM pass can match and transform into DMA+SPM transfers.
+    a_block_ptr = tl.make_block_ptr(
+        base=a_ptr, shape=(M, K), strides=(K, 1),
+        offsets=(pid_m * BLOCK_SIZE_M, 0),
+        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K), order=(1, 0))
+    b_block_ptr = tl.make_block_ptr(
+        base=b_ptr, shape=(K, N), strides=(N, 1),
+        offsets=(0, pid_n * BLOCK_SIZE_N),
+        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N), order=(1, 0))
 
     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
+    for _ in range(0, K // BLOCK_SIZE_K):
+        a = tl.load(a_block_ptr)
+        b = tl.load(b_block_ptr)
         acc = tl.dot(a, b, acc, out_dtype=tl.float32)
-        a_ptrs += BLOCK_SIZE_K          # move along K in A
-        b_ptrs += BLOCK_SIZE_K * N      # move along K in B
+        a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
+        b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
 
-    # Store C tile
-    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + offs_cm[:, None] * N + offs_cn[None, :]
-    tl.store(c_ptrs, acc)
+    # Store C tile (block pointer for consistent lowering path)
+    c_block_ptr = tl.make_block_ptr(
+        base=c_ptr, shape=(M, N), strides=(N, 1),
+        offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
+        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
+    tl.store(c_block_ptr, acc)
 
 
 # --- AOT cross-compilation ---

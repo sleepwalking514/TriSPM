@@ -2,8 +2,14 @@
 # ============================================================
 # Build a Triton kernel for RISC-V.
 #
-# Usage:  ./scripts/build_kernel.sh <kernel_name>
+# Usage:  ./scripts/build_kernel.sh <kernel_name> [--no-spm]
 # Example: ./scripts/build_kernel.sh vector_add
+#          ./scripts/build_kernel.sh matmul --no-spm
+#
+# --no-spm: skip the ConvertMemoryToSPM pass (no DMA MMIO writes,
+#           no addrspace(3) loads).  Output goes to build_nospm/
+#           so it doesn't clobber the SPM build.  Required for the
+#           cache-baseline gem5 run.
 #
 # Pipeline:
 #   1. python kernel.py  → LLVM IR (.llir) + launcher (.c/.h)
@@ -15,7 +21,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../env.sh"
 
-KERNEL="${1:?Usage: $0 <kernel_name>}"
+NO_SPM=0
+POS_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-spm) NO_SPM=1 ;;
+        *)        POS_ARGS+=("$arg") ;;
+    esac
+done
+
+KERNEL="${POS_ARGS[0]:?Usage: $0 <kernel_name> [--no-spm]}"
 KERNEL_DIR="$TRISPM_ROOT/workloads/$KERNEL"
 
 if [ ! -d "$KERNEL_DIR" ]; then
@@ -26,7 +41,18 @@ fi
 # Source per-kernel config
 source "$KERNEL_DIR/config.sh"
 
-BUILD_DIR="$KERNEL_DIR/build"
+if [ "$NO_SPM" = "1" ]; then
+    BUILD_DIR="$KERNEL_DIR/build_nospm"
+    export TRITON_DISABLE_SPM=1
+    # Triton's compile cache key is derived from CPUOptions, which does NOT
+    # include TRITON_DISABLE_SPM.  Without a separate cache directory the
+    # SPM-enabled and SPM-disabled builds collide and return whichever LLIR
+    # was cached first.
+    export TRITON_CACHE_DIR="${TRITON_CACHE_DIR_NOSPM:-$HOME/.triton/cache_nospm}"
+    echo "(SPM pass disabled — building cache-baseline binary)"
+else
+    BUILD_DIR="$KERNEL_DIR/build"
+fi
 mkdir -p "$BUILD_DIR"
 
 # Tell the Triton AOT pipeline where to write artifacts (LLIR + launcher).

@@ -1,14 +1,17 @@
 # ============================================================
 # TriSPM Workloads — Build & Run Triton kernels on gem5
 #
-# Usage:
-#   make vector_add          # build one kernel
-#   make all                 # build all kernels
+# Build targets:
+#   make <kernel>           # SPM-enabled build      → build/
+#   make <kernel>-nospm     # SPM-disabled build     → build_nospm/
+#   make all                # SPM build for all kernels
 #
-#   make run-vector_add      # run on gem5 (must build first)
-#   make run-all             # run all kernels on gem5
+# Run targets:
+#   make run-<kernel>       # cache_baseline (uses build_nospm/)
+#   make run-<kernel>-spm   # SPM mode       (uses build/)
+#   make run-all            # cache_baseline for all kernels
 #
-#   make clean               # remove all build artifacts
+#   make clean              # remove all build directories
 #
 # To add a new kernel, create workloads/<name>/ with:
 #   kernel.py   — Triton kernel definition
@@ -19,20 +22,33 @@
 
 KERNELS := vector_add matmul layer_norm
 
-.PHONY: all clean run-all $(KERNELS) $(addprefix run-,$(KERNELS))
+NOSPM_TARGETS := $(addsuffix -nospm,$(KERNELS))
+RUN_TARGETS   := $(addprefix run-,$(KERNELS))
+RUN_SPM_TARGETS := $(addsuffix -spm,$(RUN_TARGETS))
+
+.PHONY: all clean run-all $(KERNELS) $(NOSPM_TARGETS) \
+        $(RUN_TARGETS) $(RUN_SPM_TARGETS)
 
 all: $(KERNELS)
 
-run-all: $(addprefix run-,$(KERNELS))
+run-all: $(RUN_TARGETS)
 
-# Build a kernel
+# Build SPM-enabled kernel.
 $(KERNELS):
 	@./scripts/build_kernel.sh $@
 
-# Run on gem5 (default: cache baseline). Build first with `make <kernel>`.
-$(addprefix run-,$(KERNELS)):
-	@./scripts/run_gem5.sh $(subst run-,,$@) --cache_baseline
+# Build SPM-disabled kernel for cache-baseline runs.
+$(NOSPM_TARGETS):
+	@./scripts/build_kernel.sh $(@:-nospm=) --no-spm
+
+# Run on gem5 cache_baseline using the no-SPM binary.
+$(RUN_TARGETS): run-%: %-nospm
+	@./scripts/run_gem5.sh $* --no-spm --cache_baseline
+
+# Run on gem5 SPM mode using the SPM-enabled binary.
+$(RUN_SPM_TARGETS): run-%-spm: %
+	@./scripts/run_gem5.sh $*
 
 clean:
-	rm -rf $(addsuffix /build,$(KERNELS))
+	rm -rf $(addsuffix /build,$(KERNELS)) $(addsuffix /build_nospm,$(KERNELS))
 	@echo "Cleaned all build directories."
