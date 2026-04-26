@@ -30,9 +30,11 @@ done
 if [ "$NO_SPM" = "1" ]; then
     BINARY="$TRISPM_ROOT/workloads/$KERNEL/build_nospm/${KERNEL}_test"
     BUILD_HINT="./scripts/build_kernel.sh $KERNEL --no-spm"
+    MODE="cache"
 else
     BINARY="$TRISPM_ROOT/workloads/$KERNEL/build/${KERNEL}_test"
     BUILD_HINT="./scripts/build_kernel.sh $KERNEL"
+    MODE="spm"
 fi
 
 if [ ! -f "$BINARY" ]; then
@@ -56,7 +58,19 @@ echo "  binary: $BINARY"
 echo "  flags:  ${GEM5_ARGS[*]:-<none>}"
 echo ""
 
-$GEM5 "$GEM5_RUN_SCRIPT" --binary "$BINARY" "${GEM5_ARGS[@]}"
+M5OUT_DIR="$TRISPM_ROOT/workloads/m5out"
+mkdir -p "$M5OUT_DIR"
+
+$GEM5 --outdir="$M5OUT_DIR" "$GEM5_RUN_SCRIPT" --binary "$BINARY" "${GEM5_ARGS[@]}"
+
+NAMED_STATS="$M5OUT_DIR/${MODE}-${KERNEL}-stats.txt"
+# Keep the named artifact focused on the explicit kernel ROI dump. gem5 also
+# appends a final dump at process exit, which includes post-kernel harness work.
+awk '
+    /---------- Begin Simulation Statistics ----------/ { in_block = 1 }
+    in_block { print }
+    /---------- End Simulation Statistics/ && in_block { exit }
+' "$M5OUT_DIR/stats.txt" > "$NAMED_STATS"
 
 echo ""
-echo "Stats written to m5out/stats.txt"
+echo "Stats written to $NAMED_STATS"

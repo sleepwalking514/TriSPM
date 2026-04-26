@@ -10,6 +10,8 @@
 #   make run-<kernel>       # cache_baseline (uses build_nospm/)
 #   make run-<kernel>-spm   # SPM mode       (uses build/)
 #   make run-all            # cache_baseline for all kernels
+#   make matmul-stats       # compare named matmul stats files
+#   make run-matmul-compare # run both matmul modes, then compare stats
 #
 #   make clean              # remove all build directories
 #
@@ -26,8 +28,8 @@ NOSPM_TARGETS := $(addsuffix -nospm,$(KERNELS))
 RUN_TARGETS   := $(addprefix run-,$(KERNELS))
 RUN_SPM_TARGETS := $(addsuffix -spm,$(RUN_TARGETS))
 
-.PHONY: all clean run-all $(KERNELS) $(NOSPM_TARGETS) \
-        $(RUN_TARGETS) $(RUN_SPM_TARGETS)
+.PHONY: all clean run-all matmul-stats run-matmul-compare \
+        $(KERNELS) $(NOSPM_TARGETS) $(RUN_TARGETS) $(RUN_SPM_TARGETS)
 
 all: $(KERNELS)
 
@@ -48,6 +50,14 @@ $(RUN_TARGETS): run-%: %-nospm
 # Run on gem5 SPM mode using the SPM-enabled binary.
 $(RUN_SPM_TARGETS): run-%-spm: %
 	@./scripts/run_gem5.sh $*
+
+matmul-stats:
+	@python3 ./scripts/compare_matmul_stats.py
+
+run-matmul-compare:
+	@$(MAKE) run-matmul-spm
+	@$(MAKE) run-matmul
+	@$(MAKE) matmul-stats
 
 clean:
 	rm -rf $(addsuffix /build,$(KERNELS)) $(addsuffix /build_nospm,$(KERNELS))

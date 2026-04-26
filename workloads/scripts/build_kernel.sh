@@ -80,6 +80,7 @@ echo "===== [3/3] Link with harness → RISC-V binary ====="
 $CLANG $CLANG_FLAGS \
     $KERNEL_CFLAGS \
     -I"$BUILD_DIR" \
+    -I"$TRISPM_ROOT/simulator/src/scratchpad_mem" \
     "$BUILD_DIR/${KERNEL}.s" \
     "$BUILD_DIR/${KERNEL}_launcher.c" \
     "$KERNEL_DIR/harness.c" \

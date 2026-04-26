@@ -30,9 +30,9 @@ int main(void)
     printf("vector_add: SIZE=%d  BLOCK_SIZE=%d  GRID_X=%d\n",
            SIZE, BLOCK_SIZE, GRID_X);
 
-    float *x   = (float *)malloc(SIZE * sizeof(float));
-    float *y   = (float *)malloc(SIZE * sizeof(float));
-    float *out = (float *)malloc(SIZE * sizeof(float));
+    float *x   = (float *)vector_add_alloc(0, SIZE * sizeof(float));
+    float *y   = (float *)vector_add_alloc(1, SIZE * sizeof(float));
+    float *out = (float *)vector_add_alloc(2, SIZE * sizeof(float));
 
     if (!x || !y || !out) {
         fprintf(stderr, "malloc failed\n");
@@ -65,9 +65,7 @@ int main(void)
     else
         printf("FAIL: %d / %d mismatches\n", errors, SIZE);
 
-    free(x);
-    free(y);
-    free(out);
+    vector_add_free_all();
 
     return (errors > 0) ? 1 : 0;
 }

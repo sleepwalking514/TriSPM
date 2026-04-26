@@ -23,10 +23,10 @@ int main(void)
 {
     printf("layer_norm: M=%d  N=%d\n", M_SIZE, N_SIZE);
 
-    float *x     = (float *)malloc(M_SIZE * N_SIZE * sizeof(float));
-    float *gamma  = (float *)malloc(N_SIZE * sizeof(float));
-    float *beta   = (float *)malloc(N_SIZE * sizeof(float));
-    float *out   = (float *)malloc(M_SIZE * N_SIZE * sizeof(float));
+    float *x     = (float *)layer_norm_alloc(0, M_SIZE * N_SIZE * sizeof(float));
+    float *gamma = (float *)layer_norm_alloc(1, N_SIZE * sizeof(float));
+    float *beta  = (float *)layer_norm_alloc(2, N_SIZE * sizeof(float));
+    float *out   = (float *)layer_norm_alloc(3, M_SIZE * N_SIZE * sizeof(float));
 
     if (!x || !gamma || !beta || !out) {
         fprintf(stderr, "malloc failed\n");
@@ -85,10 +85,7 @@ int main(void)
     else
         printf("FAIL: %d / %d mismatches\n", errors, M_SIZE * N_SIZE);
 
-    free(x);
-    free(gamma);
-    free(beta);
-    free(out);
+    layer_norm_free_all();
 
     return (errors > 0) ? 1 : 0;
 }
