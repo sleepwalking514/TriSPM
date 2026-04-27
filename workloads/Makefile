@@ -1,147 +1,61 @@
 # ============================================================
-# TriSPM Workloads — Build & Run Triton kernels on gem5
+# TriSPM Workloads — thin wrappers around scripts/run_experiment.py.
 #
-# Build targets:
-#   make <kernel>           # SPM-enabled build      → build/
-#   make <kernel>-nospm     # SPM-disabled build     → build_nospm/
-#   make all                # SPM build for all kernels
+# All real logic (manifest loading, env export, sweeps, presets) lives
+# in scripts/run_experiment.py. Build/run paths are defined in
+# scripts/trispm_paths.py.
 #
-# Run targets:
-#   make run-<kernel>       # cache_baseline (uses build_nospm/)
-#   make run-<kernel>-spm   # SPM mode       (uses build/)
-#   make run-all            # cache_baseline for all kernels
-#   make matmul-stats       # compare named matmul stats files
-#   make run-matmul-compare N=256 BS=32
-#   make run-matmul-steady-compare N=256 BS=32
-#   make run-matmul-size-sweep
-#   make run-matmul-steady-size-sweep
+# Common targets:
+#   make build-<kernel>         build SPM + cache binaries (default tag)
+#   make run-<kernel>           SPM run only
+#   make cmp-<kernel>           SPM + cache + delta table
+#   make cmp-<kernel> PRESET=steady
+#   make cmp-<kernel> SET="N=512 BLOCK_SIZE_M=64"
+#   make sweep-<kernel> SWEEP=size [PRESET=steady]
 #
-#   make clean              # remove all build directories
-#
-# To add a new kernel, create workloads/<name>/ with:
-#   kernel.py   — Triton kernel definition
-#   harness.c   — C test driver
-#   config.sh   — BLOCK_SIZE, SIZE, etc.
-# Then add <name> to KERNELS below.
+#   make all                    build all kernels (spm + cache)
+#   make clean                  rm -rf workloads/build workloads/m5out
 # ============================================================
 
 KERNELS := vector_add matmul layer_norm
-N ?= 256
-BS ?= 32
-MATMUL_SWEEP_SIZES ?= 128 256
-MATMUL_STEADY_WARMUP ?= 2
-MATMUL_STEADY_MEASURE ?= 5
-MATMUL_TAG := n$(N)-bs$(BS)
-MATMUL_STEADY_TAG := steady-$(MATMUL_TAG)
-MATMUL_SINGLE_ENV := MATMUL_M=$(N) MATMUL_N=$(N) MATMUL_K=$(N) \
-                     MATMUL_BLOCK_SIZE_M=$(BS) \
-                     MATMUL_BLOCK_SIZE_N=$(BS) \
-                     MATMUL_BLOCK_SIZE_K=$(BS)
 
-NOSPM_TARGETS := $(addsuffix -nospm,$(KERNELS))
+PRESET ?=
+SWEEP  ?=
+SET    ?=
+
+DRIVER := python3 ./scripts/run_experiment.py
+
+# Translate make-vars to driver flags.
+PRESET_FLAG := $(if $(PRESET),--preset $(PRESET),)
+SET_FLAG    := $(foreach kv,$(SET),--set $(kv))
+
+BUILD_TARGETS := $(addprefix build-,$(KERNELS))
 RUN_TARGETS   := $(addprefix run-,$(KERNELS))
-RUN_SPM_TARGETS := $(addsuffix -spm,$(RUN_TARGETS))
+CMP_TARGETS   := $(addprefix cmp-,$(KERNELS))
+SWEEP_TARGETS := $(addprefix sweep-,$(KERNELS))
 
-.PHONY: all clean run-all matmul-stats run-matmul-compare \
-        run-matmul-steady-compare run-matmul-size-sweep \
-        run-matmul-steady-size-sweep \
-        $(KERNELS) $(NOSPM_TARGETS) $(RUN_TARGETS) $(RUN_SPM_TARGETS)
+.PHONY: all clean $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(SWEEP_TARGETS)
 
-all: $(KERNELS)
+all: $(BUILD_TARGETS)
 
-run-all: $(RUN_TARGETS)
+# Build both spm + cache binaries; no gem5 run.
+$(BUILD_TARGETS): build-%:
+	@./scripts/build_kernel.sh $* --mode spm
+	@./scripts/build_kernel.sh $* --mode cache
 
-# Build SPM-enabled kernel.
-$(KERNELS):
-	@./scripts/build_kernel.sh $@
+# SPM-only run (build + run).
+$(RUN_TARGETS): run-%:
+	@$(DRIVER) $* --mode spm $(PRESET_FLAG) $(SET_FLAG)
 
-# Build SPM-disabled kernel for cache-baseline runs.
-$(NOSPM_TARGETS):
-	@./scripts/build_kernel.sh $(@:-nospm=) --no-spm
+# Full comparison: build + run both modes + delta table.
+$(CMP_TARGETS): cmp-%:
+	@$(DRIVER) $* --mode compare $(PRESET_FLAG) $(SET_FLAG)
 
-# Run on gem5 cache_baseline using the no-SPM binary.
-$(RUN_TARGETS): run-%: %-nospm
-	@./scripts/run_gem5.sh $* --no-spm --cache_baseline
-
-# Run on gem5 SPM mode using the SPM-enabled binary.
-$(RUN_SPM_TARGETS): run-%-spm: %
-	@./scripts/run_gem5.sh $*
-
-matmul-stats:
-	@python3 ./scripts/compare_matmul_stats.py
-
-run-matmul-compare:
-	@echo "===== matmul cold-cache N=$(N) BS=$(BS) ====="
-	@$(MATMUL_SINGLE_ENV) \
-	  KERNEL_BUILD_SUFFIX=-$(MATMUL_TAG) STATS_SUFFIX=-$(MATMUL_TAG) \
-	  $(MAKE) run-matmul-spm
-	@$(MATMUL_SINGLE_ENV) \
-	  KERNEL_BUILD_SUFFIX=-$(MATMUL_TAG) STATS_SUFFIX=-$(MATMUL_TAG) \
-	  $(MAKE) run-matmul
-	@python3 ./scripts/compare_matmul_stats.py \
-	  --spm m5out/spm-matmul-$(MATMUL_TAG)-stats.txt \
-	  --cache m5out/cache-matmul-$(MATMUL_TAG)-stats.txt
-
-run-matmul-steady-compare:
-	@echo "===== matmul steady-state N=$(N) BS=$(BS) ====="
-	@$(MATMUL_SINGLE_ENV) \
-	  MATMUL_WARMUP_ITERS=$(MATMUL_STEADY_WARMUP) \
-	  MATMUL_MEASURE_ITERS=$(MATMUL_STEADY_MEASURE) \
-	  MATMUL_FLUSH_BEFORE_ROI=0 \
-	  KERNEL_BUILD_SUFFIX=-$(MATMUL_STEADY_TAG) STATS_SUFFIX=-$(MATMUL_STEADY_TAG) \
-	  $(MAKE) run-matmul-spm
-	@$(MATMUL_SINGLE_ENV) \
-	  MATMUL_WARMUP_ITERS=$(MATMUL_STEADY_WARMUP) \
-	  MATMUL_MEASURE_ITERS=$(MATMUL_STEADY_MEASURE) \
-	  MATMUL_FLUSH_BEFORE_ROI=0 \
-	  KERNEL_BUILD_SUFFIX=-$(MATMUL_STEADY_TAG) STATS_SUFFIX=-$(MATMUL_STEADY_TAG) \
-	  $(MAKE) run-matmul
-	@python3 ./scripts/compare_matmul_stats.py \
-	  --spm m5out/spm-matmul-$(MATMUL_STEADY_TAG)-stats.txt \
-	  --cache m5out/cache-matmul-$(MATMUL_STEADY_TAG)-stats.txt \
-	  --measure-iters $(MATMUL_STEADY_MEASURE)
-
-run-matmul-size-sweep:
-	@for size in $(MATMUL_SWEEP_SIZES); do \
-	  tag=n$${size}-bs$(BS); \
-	  echo "===== matmul cold-cache N=$${size} BS=$(BS) ====="; \
-	  MATMUL_M=$$size MATMUL_N=$$size MATMUL_K=$$size \
-	    MATMUL_BLOCK_SIZE_M=$(BS) MATMUL_BLOCK_SIZE_N=$(BS) MATMUL_BLOCK_SIZE_K=$(BS) \
-	    KERNEL_BUILD_SUFFIX=-$${tag} STATS_SUFFIX=-$${tag} \
-	    $(MAKE) run-matmul-spm; \
-	  MATMUL_M=$$size MATMUL_N=$$size MATMUL_K=$$size \
-	    MATMUL_BLOCK_SIZE_M=$(BS) MATMUL_BLOCK_SIZE_N=$(BS) MATMUL_BLOCK_SIZE_K=$(BS) \
-	    KERNEL_BUILD_SUFFIX=-$${tag} STATS_SUFFIX=-$${tag} \
-	    $(MAKE) run-matmul; \
-	  python3 ./scripts/compare_matmul_stats.py \
-	    --spm m5out/spm-matmul-$${tag}-stats.txt \
-	    --cache m5out/cache-matmul-$${tag}-stats.txt; \
-	done
-
-run-matmul-steady-size-sweep:
-	@for size in $(MATMUL_SWEEP_SIZES); do \
-	  tag=steady-n$${size}-bs$(BS); \
-	  echo "===== matmul steady-state N=$${size} BS=$(BS) ====="; \
-	  MATMUL_M=$$size MATMUL_N=$$size MATMUL_K=$$size \
-	    MATMUL_BLOCK_SIZE_M=$(BS) MATMUL_BLOCK_SIZE_N=$(BS) MATMUL_BLOCK_SIZE_K=$(BS) \
-	    MATMUL_WARMUP_ITERS=$(MATMUL_STEADY_WARMUP) \
-	    MATMUL_MEASURE_ITERS=$(MATMUL_STEADY_MEASURE) \
-	    MATMUL_FLUSH_BEFORE_ROI=0 \
-	    KERNEL_BUILD_SUFFIX=-$${tag} STATS_SUFFIX=-$${tag} \
-	    $(MAKE) run-matmul-spm; \
-	  MATMUL_M=$$size MATMUL_N=$$size MATMUL_K=$$size \
-	    MATMUL_BLOCK_SIZE_M=$(BS) MATMUL_BLOCK_SIZE_N=$(BS) MATMUL_BLOCK_SIZE_K=$(BS) \
-	    MATMUL_WARMUP_ITERS=$(MATMUL_STEADY_WARMUP) \
-	    MATMUL_MEASURE_ITERS=$(MATMUL_STEADY_MEASURE) \
-	    MATMUL_FLUSH_BEFORE_ROI=0 \
-	    KERNEL_BUILD_SUFFIX=-$${tag} STATS_SUFFIX=-$${tag} \
-	    $(MAKE) run-matmul; \
-	  python3 ./scripts/compare_matmul_stats.py \
-	    --spm m5out/spm-matmul-$${tag}-stats.txt \
-	    --cache m5out/cache-matmul-$${tag}-stats.txt \
-	    --measure-iters $(MATMUL_STEADY_MEASURE); \
-	done
+# Manifest-defined sweep, e.g. `make sweep-matmul SWEEP=size PRESET=steady`.
+$(SWEEP_TARGETS): sweep-%:
+	@test -n "$(SWEEP)" || { echo "SWEEP=<name> required (see kernel's experiment.toml [sweeps.*])"; exit 2; }
+	@$(DRIVER) $* --mode compare --sweep $(SWEEP) $(PRESET_FLAG) $(SET_FLAG)
 
 clean:
-	rm -rf $(addsuffix /build*,$(KERNELS)) $(addsuffix /build_nospm*,$(KERNELS))
-	@echo "Cleaned all build directories."
+	rm -rf build m5out
+	@echo "Removed workloads/build/ and workloads/m5out/."

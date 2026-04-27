@@ -1,0 +1,7 @@
+[kernel]
+name = "layer_norm"
+env_prefix = ""
+
+[params]
+M_SIZE = 32
+N_SIZE = 64

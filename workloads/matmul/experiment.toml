@@ -1,0 +1,38 @@
+# Experiment manifest for matmul.
+#
+# `params` are forwarded to kernel.py (Python) and harness.c (via -D macros)
+# as MATMUL_<UPPER_KEY> env vars. The build script also exports them so
+# config.sh-style sourcing keeps working.
+#
+# `sweeps` defines named sweep dimensions consumed by run_experiment.py.
+
+[kernel]
+name = "matmul"
+# Env var prefix prepended to each [params] key when exporting to
+# kernel.py / config.sh. matmul's kernel.py reads MATMUL_M etc.
+env_prefix = "MATMUL_"
+
+[params]
+M = 256
+N = 256
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 4
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+
+# Steady-state preset: warmup + multi-iter measurement, no pre-ROI flush.
+[presets.steady]
+WARMUP_ITERS = 2
+MEASURE_ITERS = 5
+FLUSH_BEFORE_ROI = 0
+
+# tag = "n{N}-bs{BLOCK_SIZE_M}" — used by --sweep size to label runs.
+[sweeps.size]
+axis = "N"
+values = [128, 256]
+mirror = ["M", "K"]   # set M=K=N for each value
+tag_template = "n{N}-bs{BLOCK_SIZE_M}"

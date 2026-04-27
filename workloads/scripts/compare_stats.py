@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Print a compact SPM-vs-cache summary for matmul gem5 stats."""
+"""Print a compact SPM-vs-cache delta table from two gem5 stats dumps.
+
+Inputs are explicit ROI stats files (one per mode); paths come from
+trispm_paths.roi_stats_path.
+"""
 
 from __future__ import annotations
 
@@ -137,13 +141,9 @@ def print_summary(spm: dict[str, str], cache: dict[str, str], measure_iters: int
 
 
 def main() -> None:
-    script_dir = Path(__file__).resolve().parent
-    workloads_dir = script_dir.parent
-    default_m5out = workloads_dir / "m5out"
-
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spm", type=Path, default=default_m5out / "spm-matmul-stats.txt")
-    parser.add_argument("--cache", type=Path, default=default_m5out / "cache-matmul-stats.txt")
+    parser.add_argument("--spm", type=Path, required=True, help="ROI stats from SPM run")
+    parser.add_argument("--cache", type=Path, required=True, help="ROI stats from cache-baseline run")
     parser.add_argument(
         "--section",
         choices=("first", "last"),
