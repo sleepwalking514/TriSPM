@@ -103,8 +103,20 @@ def fmt_delta(spm_value: str | None, cache_value: str | None) -> str:
     return f"{delta:+.0f} ({delta / cache_num:+.1%})"
 
 
-def print_summary(spm: dict[str, str], cache: dict[str, str]) -> None:
+def print_summary(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> None:
     rows = []
+    if measure_iters > 1:
+        spm_cycles = as_number(spm.get("system.cpu.numCycles"))
+        cache_cycles = as_number(cache.get("system.cpu.numCycles"))
+        rows.append((
+            "avgCycles/iter",
+            "-" if spm_cycles is None else f"{spm_cycles / measure_iters:.1f}",
+            "-" if cache_cycles is None else f"{cache_cycles / measure_iters:.1f}",
+            fmt_delta(
+                None if spm_cycles is None else str(spm_cycles / measure_iters),
+                None if cache_cycles is None else str(cache_cycles / measure_iters),
+            ),
+        ))
     for label, stat_name in FIELDS:
         spm_value = spm.get(stat_name)
         cache_value = cache.get(stat_name)
@@ -138,11 +150,17 @@ def main() -> None:
         default="first",
         help="which stats section to read when a file contains multiple dumps",
     )
+    parser.add_argument(
+        "--measure-iters",
+        type=int,
+        default=1,
+        help="kernel launches inside the measured ROI; prints avgCycles/iter when >1",
+    )
     args = parser.parse_args()
 
     spm = load_stats(args.spm, args.section)
     cache = load_stats(args.cache, args.section)
-    print_summary(spm, cache)
+    print_summary(spm, cache, args.measure_iters)
 
 
 if __name__ == "__main__":

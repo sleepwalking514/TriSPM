@@ -28,11 +28,11 @@ for arg in "$@"; do
 done
 
 if [ "$NO_SPM" = "1" ]; then
-    BINARY="$TRISPM_ROOT/workloads/$KERNEL/build_nospm/${KERNEL}_test"
+    BINARY="$TRISPM_ROOT/workloads/$KERNEL/build_nospm${KERNEL_BUILD_SUFFIX:-}/${KERNEL}_test"
     BUILD_HINT="./scripts/build_kernel.sh $KERNEL --no-spm"
     MODE="cache"
 else
-    BINARY="$TRISPM_ROOT/workloads/$KERNEL/build/${KERNEL}_test"
+    BINARY="$TRISPM_ROOT/workloads/$KERNEL/build${KERNEL_BUILD_SUFFIX:-}/${KERNEL}_test"
     BUILD_HINT="./scripts/build_kernel.sh $KERNEL"
     MODE="spm"
 fi
@@ -63,7 +63,8 @@ mkdir -p "$M5OUT_DIR"
 
 $GEM5 --outdir="$M5OUT_DIR" "$GEM5_RUN_SCRIPT" --binary "$BINARY" "${GEM5_ARGS[@]}"
 
-NAMED_STATS="$M5OUT_DIR/${MODE}-${KERNEL}-stats.txt"
+STATS_SUFFIX="${STATS_SUFFIX:-${KERNEL_BUILD_SUFFIX:-}}"
+NAMED_STATS="$M5OUT_DIR/${MODE}-${KERNEL}${STATS_SUFFIX}-stats.txt"
 # Keep the named artifact focused on the explicit kernel ROI dump. gem5 also
 # appends a final dump at process exit, which includes post-kernel harness work.
 awk '

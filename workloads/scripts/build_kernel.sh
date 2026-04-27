@@ -41,8 +41,10 @@ fi
 # Source per-kernel config
 source "$KERNEL_DIR/config.sh"
 
+BUILD_SUFFIX="${KERNEL_BUILD_SUFFIX:-}"
+
 if [ "$NO_SPM" = "1" ]; then
-    BUILD_DIR="$KERNEL_DIR/build_nospm"
+    BUILD_DIR="$KERNEL_DIR/build_nospm${BUILD_SUFFIX}"
     export TRITON_DISABLE_SPM=1
     # Triton's compile cache key is derived from CPUOptions, which does NOT
     # include TRITON_DISABLE_SPM.  Without a separate cache directory the
@@ -51,7 +53,7 @@ if [ "$NO_SPM" = "1" ]; then
     export TRITON_CACHE_DIR="${TRITON_CACHE_DIR_NOSPM:-$HOME/.triton/cache_nospm}"
     echo "(SPM pass disabled — building cache-baseline binary)"
 else
-    BUILD_DIR="$KERNEL_DIR/build"
+    BUILD_DIR="$KERNEL_DIR/build${BUILD_SUFFIX}"
 fi
 mkdir -p "$BUILD_DIR"
 

@@ -5,19 +5,24 @@ Tiled matrix multiply: C[M,N] = A[M,K] @ B[K,N]
 All dimensions are exact multiples of their block sizes (no masking).
 Row-major contiguous layout; strides baked in as constexprs.
 """
+import os
+
 import torch
 import triton
 import triton.language as tl
 
-M = 64
-N = 64
-K = 64
-BLOCK_SIZE_M = 16
-BLOCK_SIZE_N = 16
-BLOCK_SIZE_K = 16
-GROUP_SIZE_M = 4
+M = int(os.getenv("MATMUL_M", "64"))
+N = int(os.getenv("MATMUL_N", "64"))
+K = int(os.getenv("MATMUL_K", "64"))
+BLOCK_SIZE_M = int(os.getenv("MATMUL_BLOCK_SIZE_M", "16"))
+BLOCK_SIZE_N = int(os.getenv("MATMUL_BLOCK_SIZE_N", "16"))
+BLOCK_SIZE_K = int(os.getenv("MATMUL_BLOCK_SIZE_K", "16"))
+GROUP_SIZE_M = int(os.getenv("MATMUL_GROUP_SIZE_M", "4"))
 
-GRID_X = (M // BLOCK_SIZE_M) * (N // BLOCK_SIZE_N)  # 16
+if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0 or K % BLOCK_SIZE_K != 0:
+    raise ValueError("matmul dimensions must be exact multiples of block sizes")
+
+GRID_X = (M // BLOCK_SIZE_M) * (N // BLOCK_SIZE_N)
 
 
 @triton.jit

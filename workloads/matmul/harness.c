@@ -32,9 +32,21 @@
 #define GRID_X  (((M + BLOCK_SIZE_M - 1) / BLOCK_SIZE_M) \
                * ((N + BLOCK_SIZE_N - 1) / BLOCK_SIZE_N))
 
+#ifndef MATMUL_WARMUP_ITERS
+#define MATMUL_WARMUP_ITERS 0
+#endif
+#ifndef MATMUL_MEASURE_ITERS
+#define MATMUL_MEASURE_ITERS 1
+#endif
+#ifndef MATMUL_FLUSH_BEFORE_ROI
+#define MATMUL_FLUSH_BEFORE_ROI 1
+#endif
+
 int main(void)
 {
-    printf("matmul: M=%d  N=%d  K=%d  GRID_X=%d\n", M, N, K, GRID_X);
+    printf("matmul: M=%d  N=%d  K=%d  GRID_X=%d  warmup=%d  measure=%d  flush=%d\n",
+           M, N, K, GRID_X, MATMUL_WARMUP_ITERS, MATMUL_MEASURE_ITERS,
+           MATMUL_FLUSH_BEFORE_ROI);
 
     /* Cacheable shadows for inputs.  In SPM mode the launcher places A/B
      * in the uncacheable DMA buffer; doing the host-side init and the
@@ -91,16 +103,20 @@ int main(void)
     memset(c, 0, c_bytes);
 
     /* Cold-cache fair baseline: scrub L1+L2 so SPM and cache modes both
-     * face a DRAM-cold starting state in the measured ROI.  Without this
-     * the cache baseline gets an unearned warmup bonus from the init /
-     * reference phase, which biases comparisons against SPM. */
-    flush_caches();
+     * face a DRAM-cold starting state in the measured ROI.  Steady-state
+     * runs disable this and use warmup launches before m5_reset_stats(). */
+    if (MATMUL_FLUSH_BEFORE_ROI)
+        flush_caches();
+
+    for (int iter = 0; iter < MATMUL_WARMUP_ITERS; iter++)
+        matmul_launch(GRID_X, 1, 1, a, b, c);
 
     /* Measure only the Triton kernel ROI; init/ref/publish stay outside. */
     m5_reset_stats(0, 0);
 
     /* Launch Triton kernel over the 1-D grid. */
-    matmul_launch(GRID_X, 1, 1, a, b, c);
+    for (int iter = 0; iter < MATMUL_MEASURE_ITERS; iter++)
+        matmul_launch(GRID_X, 1, 1, a, b, c);
 
     m5_dump_stats(0, 0);
 
