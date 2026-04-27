@@ -108,6 +108,10 @@ def fmt_delta(spm_value: str | None, cache_value: str | None) -> str:
 
 
 def print_summary(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> None:
+    print(render_summary(spm, cache, measure_iters))
+
+
+def render_summary(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> str:
     rows = []
     if measure_iters > 1:
         spm_cycles = as_number(spm.get("system.cpu.numCycles"))
@@ -134,10 +138,13 @@ def print_summary(spm: dict[str, str], cache: dict[str, str], measure_iters: int
     ]
 
     header = ("stat", "spm", "cache", "delta")
-    print(f"{header[0]:<{widths[0]}}  {header[1]:>{widths[1]}}  {header[2]:>{widths[2]}}  {header[3]:>{widths[3]}}")
-    print(f"{'-' * widths[0]}  {'-' * widths[1]}  {'-' * widths[2]}  {'-' * widths[3]}")
+    lines = [
+        f"{header[0]:<{widths[0]}}  {header[1]:>{widths[1]}}  {header[2]:>{widths[2]}}  {header[3]:>{widths[3]}}",
+        f"{'-' * widths[0]}  {'-' * widths[1]}  {'-' * widths[2]}  {'-' * widths[3]}",
+    ]
     for row in rows:
-        print(f"{row[0]:<{widths[0]}}  {row[1]:>{widths[1]}}  {row[2]:>{widths[2]}}  {row[3]:>{widths[3]}}")
+        lines.append(f"{row[0]:<{widths[0]}}  {row[1]:>{widths[1]}}  {row[2]:>{widths[2]}}  {row[3]:>{widths[3]}}")
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -156,11 +163,18 @@ def main() -> None:
         default=1,
         help="kernel launches inside the measured ROI; prints avgCycles/iter when >1",
     )
+    parser.add_argument("--output", type=Path, default=None, help="write table to file instead of stdout")
     args = parser.parse_args()
 
     spm = load_stats(args.spm, args.section)
     cache = load_stats(args.cache, args.section)
-    print_summary(spm, cache, args.measure_iters)
+    summary = render_summary(spm, cache, args.measure_iters)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(summary + "\n")
+        print(f"Compare table written to {args.output}")
+    else:
+        print(summary)
 
 
 if __name__ == "__main__":

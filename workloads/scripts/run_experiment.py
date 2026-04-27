@@ -76,12 +76,14 @@ def do_run(kernel: str, mode: str, tag: str, gem5_flags: list[str], env: dict[st
 def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
     spm_stats = trispm_paths.roi_stats_path(kernel, "spm", tag)
     cache_stats = trispm_paths.roi_stats_path(kernel, "cache", tag)
+    compare = trispm_paths.compare_path(kernel, tag)
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "compare_stats.py"),
         "--spm", str(spm_stats),
         "--cache", str(cache_stats),
         "--measure-iters", str(measure_iters),
+        "--output", str(compare),
     ]
     run(cmd)
 
