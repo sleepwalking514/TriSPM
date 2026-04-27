@@ -23,6 +23,7 @@ GROUP_SIZE_M = 4
 WARMUP_ITERS = 0
 MEASURE_ITERS = 1
 FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
 
 # Steady-state preset: warmup + multi-iter measurement, no pre-ROI flush.
 [presets.steady]

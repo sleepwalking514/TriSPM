@@ -8,10 +8,19 @@
 # Common targets:
 #   make build-<kernel>         build SPM + cache binaries (default tag)
 #   make run-<kernel>           SPM run only
-#   make cmp-<kernel>           SPM + cache + delta table
+#   make cmp-<kernel>           SPM + cache + saved compare table
 #   make cmp-<kernel> PRESET=steady
-#   make cmp-<kernel> SET="N=512 BLOCK_SIZE_M=64"
-#   make sweep-<kernel> SWEEP=size [PRESET=steady]
+#   make cmp-<kernel> SET="CHECK_RESULT=0"
+#   make cmp-matmul SET="N=512 M=512 K=512 BLOCK_SIZE_M=64"
+#   make sweep-matmul SWEEP=size [PRESET=steady] [SET="CHECK_RESULT=0"]
+#
+# Compare output:
+#   workloads/m5out/<kernel>/<tag>/compare.txt
+#
+# matmul sweep=size:
+#   values come from matmul/experiment.toml [sweeps.size].
+#   It mirrors N into M and K, then tags runs as n<N>-bs<BLOCK_SIZE_M>.
+#   With PRESET=steady, tags are prefixed as steady-n<N>-bs<BLOCK_SIZE_M>.
 #
 #   make all                    build all kernels (spm + cache)
 #   make clean                  rm -rf workloads/build workloads/m5out

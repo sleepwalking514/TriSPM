@@ -164,6 +164,7 @@ def main() -> None:
         help="kernel launches inside the measured ROI; prints avgCycles/iter when >1",
     )
     parser.add_argument("--output", type=Path, default=None, help="write table to file instead of stdout")
+    parser.add_argument("--quiet", action="store_true", help="do not print when writing --output")
     args = parser.parse_args()
 
     spm = load_stats(args.spm, args.section)
@@ -172,7 +173,8 @@ def main() -> None:
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(summary + "\n")
-        print(f"Compare table written to {args.output}")
+        if not args.quiet:
+            print(f"Compare table written to {args.output}")
     else:
         print(summary)
 

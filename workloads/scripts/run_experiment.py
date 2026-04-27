@@ -12,7 +12,7 @@ Usage:
 Modes:
   spm       build + run with SPM
   cache     build + run cache-baseline
-  compare   build + run both, then print delta table
+  compare   build + run both, then save delta table
 """
 from __future__ import annotations
 
@@ -57,9 +57,14 @@ def export_env(manifest: dict, params: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def run(cmd: list[str], env: dict[str, str] | None = None) -> None:
-    print(f"$ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
+def run(cmd: list[str], env: dict[str, str] | None = None, echo: bool = True) -> None:
+    if echo:
+        print(f"$ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
     subprocess.run(cmd, check=True, env=env)
+
+
+def rel_workloads_path(path: Path) -> str:
+    return str(path.relative_to(WORKLOADS_DIR))
 
 
 def do_build(kernel: str, mode: str, tag: str, env: dict[str, str]) -> None:
@@ -84,8 +89,10 @@ def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
         "--cache", str(cache_stats),
         "--measure-iters", str(measure_iters),
         "--output", str(compare),
+        "--quiet",
     ]
-    run(cmd)
+    run(cmd, echo=False)
+    print(f"Compare saved: {rel_workloads_path(compare)}")
 
 
 def render_tag(template: str | None, params: dict[str, str], default: str) -> str:

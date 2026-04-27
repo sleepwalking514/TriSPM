@@ -18,10 +18,13 @@
 #ifndef N_SIZE
 #error "N_SIZE must be defined via -D flag"
 #endif
+#ifndef CHECK_RESULT
+#define CHECK_RESULT 1
+#endif
 
 int main(void)
 {
-    printf("layer_norm: M=%d  N=%d\n", M_SIZE, N_SIZE);
+    printf("layer_norm: M=%d  N=%d  check=%d\n", M_SIZE, N_SIZE, CHECK_RESULT);
 
     float *x     = (float *)layer_norm_alloc(0, M_SIZE * N_SIZE * sizeof(float));
     float *gamma = (float *)layer_norm_alloc(1, N_SIZE * sizeof(float));
@@ -48,6 +51,7 @@ int main(void)
      * Triton compiler from merging loop iterations into LMUL=8 ops. */
     layer_norm_launch(M_SIZE, 1, 1, x, gamma, beta, out, N_SIZE);
 
+#if CHECK_RESULT
     /* Reference layer-norm and verification. */
     int errors = 0;
     for (int i = 0; i < M_SIZE; i++) {
@@ -84,8 +88,15 @@ int main(void)
         printf("PASS: all %d elements correct\n", M_SIZE * N_SIZE);
     else
         printf("FAIL: %d / %d mismatches\n", errors, M_SIZE * N_SIZE);
+#else
+    printf("SKIP: result check disabled\n");
+#endif
 
     layer_norm_free_all();
 
+#if CHECK_RESULT
     return (errors > 0) ? 1 : 0;
+#else
+    return 0;
+#endif
 }

@@ -41,18 +41,22 @@
 #ifndef MATMUL_FLUSH_BEFORE_ROI
 #define MATMUL_FLUSH_BEFORE_ROI 1
 #endif
+#ifndef MATMUL_CHECK_RESULT
+#define MATMUL_CHECK_RESULT 1
+#endif
 
 int main(void)
 {
-    printf("matmul: M=%d  N=%d  K=%d  GRID_X=%d  warmup=%d  measure=%d  flush=%d\n",
+    printf("matmul: M=%d  N=%d  K=%d  GRID_X=%d  warmup=%d  measure=%d  flush=%d  check=%d\n",
            M, N, K, GRID_X, MATMUL_WARMUP_ITERS, MATMUL_MEASURE_ITERS,
-           MATMUL_FLUSH_BEFORE_ROI);
+           MATMUL_FLUSH_BEFORE_ROI, MATMUL_CHECK_RESULT);
 
     /* Cacheable shadows for inputs.  In SPM mode the launcher places A/B
      * in the uncacheable DMA buffer; doing the host-side init and the
      * naive reference on those addresses is extremely slow because every
-     * scalar load/store bypasses the cache.  We init/ref on cacheable
-     * shadows and DMA-publish into the launcher's buffers in one shot. */
+     * scalar load/store bypasses the cache.  We initialize on cacheable
+     * shadows, optionally compute the reference there, then DMA-publish
+     * into the launcher's buffers in one shot. */
     size_t a_bytes = (size_t)M * K * sizeof(float);
     size_t b_bytes = (size_t)K * N * sizeof(float);
     size_t c_bytes = (size_t)M * N * sizeof(float);
@@ -62,9 +66,15 @@ int main(void)
     float *a   = (float *)matmul_alloc(0, a_bytes);
     float *b   = (float *)matmul_alloc(1, b_bytes);
     float *c   = (float *)matmul_alloc(2, c_bytes);
+#if MATMUL_CHECK_RESULT
     float *ref = (float *)malloc(c_bytes);
+#endif
 
-    if (!a_shadow || !b_shadow || !a || !b || !c || !ref) {
+    if (!a_shadow || !b_shadow || !a || !b || !c
+#if MATMUL_CHECK_RESULT
+        || !ref
+#endif
+    ) {
         fprintf(stderr, "malloc failed\n");
         return 1;
     }
@@ -75,6 +85,7 @@ int main(void)
     for (int i = 0; i < K * N; i++)
         b_shadow[i] = (float)((i % 13) - 6) * 0.1f;
 
+#if MATMUL_CHECK_RESULT
     /* Reference matmul on cacheable shadows. */
     for (int i = 0; i < M; i++)
         for (int j = 0; j < N; j++) {
@@ -83,8 +94,9 @@ int main(void)
                 sum += a_shadow[i * K + kk] * b_shadow[kk * N + j];
             ref[i * N + j] = sum;
         }
+#endif
 
-    /* Force shadow + ref dirty lines back to DRAM so the DMA engine
+    /* Force shadow dirty lines back to DRAM so the DMA engine
      * reading a_shadow/b_shadow on the next step sees the data the
      * scalar code just wrote.  In a coherent hierarchy gem5's L2 bus
      * snoops L1d, but flushing first makes the contract explicit and
@@ -120,6 +132,7 @@ int main(void)
 
     m5_dump_stats(0, 0);
 
+#if MATMUL_CHECK_RESULT
     /* Verify — print per-tile summary to locate which tiles fail. */
     int errors = 0;
     for (int i = 0; i < M * N; i++) {
@@ -141,7 +154,14 @@ int main(void)
         printf("\nFAIL: %d / %d mismatches\n", errors, M * N);
 
     free(ref);
+#else
+    printf("\nSKIP: result check disabled\n");
+#endif
     matmul_free_all();
 
+#if MATMUL_CHECK_RESULT
     return (errors > 0) ? 1 : 0;
+#else
+    return 0;
+#endif
 }

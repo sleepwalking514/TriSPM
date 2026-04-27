@@ -22,13 +22,16 @@
 #ifndef SIZE
 #error "SIZE must be defined via -D flag"
 #endif
+#ifndef CHECK_RESULT
+#define CHECK_RESULT 1
+#endif
 
 #define GRID_X  ((SIZE + BLOCK_SIZE - 1) / BLOCK_SIZE)
 
 int main(void)
 {
-    printf("vector_add: SIZE=%d  BLOCK_SIZE=%d  GRID_X=%d\n",
-           SIZE, BLOCK_SIZE, GRID_X);
+    printf("vector_add: SIZE=%d  BLOCK_SIZE=%d  GRID_X=%d  check=%d\n",
+           SIZE, BLOCK_SIZE, GRID_X, CHECK_RESULT);
 
     float *x   = (float *)vector_add_alloc(0, SIZE * sizeof(float));
     float *y   = (float *)vector_add_alloc(1, SIZE * sizeof(float));
@@ -48,6 +51,7 @@ int main(void)
     /* Launch kernel over the 1-D grid via the generated launcher. */
     vector_add_launch(GRID_X, 1, 1, x, y, out);
 
+#if CHECK_RESULT
     /* Verify */
     int errors = 0;
     for (int i = 0; i < SIZE; i++) {
@@ -64,8 +68,15 @@ int main(void)
         printf("PASS: all %d elements correct\n", SIZE);
     else
         printf("FAIL: %d / %d mismatches\n", errors, SIZE);
+#else
+    printf("SKIP: result check disabled\n");
+#endif
 
     vector_add_free_all();
 
+#if CHECK_RESULT
     return (errors > 0) ? 1 : 0;
+#else
+    return 0;
+#endif
 }
