@@ -36,34 +36,67 @@ int main(void)
 {
     printf("matmul: M=%d  N=%d  K=%d  GRID_X=%d\n", M, N, K, GRID_X);
 
-    float *a   = (float *)matmul_alloc(0, M * K * sizeof(float));
-    float *b   = (float *)matmul_alloc(1, K * N * sizeof(float));
-    float *c   = (float *)matmul_alloc(2, M * N * sizeof(float));
-    float *ref = (float *)malloc(M * N * sizeof(float));
+    /* Cacheable shadows for inputs.  In SPM mode the launcher places A/B
+     * in the uncacheable DMA buffer; doing the host-side init and the
+     * naive reference on those addresses is extremely slow because every
+     * scalar load/store bypasses the cache.  We init/ref on cacheable
+     * shadows and DMA-publish into the launcher's buffers in one shot. */
+    size_t a_bytes = (size_t)M * K * sizeof(float);
+    size_t b_bytes = (size_t)K * N * sizeof(float);
+    size_t c_bytes = (size_t)M * N * sizeof(float);
 
-    if (!a || !b || !c || !ref) {
+    float *a_shadow = (float *)malloc(a_bytes);
+    float *b_shadow = (float *)malloc(b_bytes);
+    float *a   = (float *)matmul_alloc(0, a_bytes);
+    float *b   = (float *)matmul_alloc(1, b_bytes);
+    float *c   = (float *)matmul_alloc(2, c_bytes);
+    float *ref = (float *)malloc(c_bytes);
+
+    if (!a_shadow || !b_shadow || !a || !b || !c || !ref) {
         fprintf(stderr, "malloc failed\n");
         return 1;
     }
 
     /* Init: deterministic, small values to avoid fp overflow. */
     for (int i = 0; i < M * K; i++)
-        a[i] = (float)((i % 17) - 8) * 0.1f;
+        a_shadow[i] = (float)((i % 17) - 8) * 0.1f;
     for (int i = 0; i < K * N; i++)
-        b[i] = (float)((i % 13) - 6) * 0.1f;
-    for (int i = 0; i < M * N; i++)
-        c[i] = 0.0f;
+        b_shadow[i] = (float)((i % 13) - 6) * 0.1f;
 
-    /* Reference matmul (naive triple loop). */
+    /* Reference matmul on cacheable shadows. */
     for (int i = 0; i < M; i++)
         for (int j = 0; j < N; j++) {
             float sum = 0.0f;
             for (int kk = 0; kk < K; kk++)
-                sum += a[i * K + kk] * b[kk * N + j];
+                sum += a_shadow[i * K + kk] * b_shadow[kk * N + j];
             ref[i * N + j] = sum;
         }
 
-    /* Measure only the Triton kernel ROI; init/ref stay outside this window. */
+    /* Force shadow + ref dirty lines back to DRAM so the DMA engine
+     * reading a_shadow/b_shadow on the next step sees the data the
+     * scalar code just wrote.  In a coherent hierarchy gem5's L2 bus
+     * snoops L1d, but flushing first makes the contract explicit and
+     * also matches the pattern we use for the kernel cold-start. */
+    flush_caches();
+
+    /* Publish inputs into the launcher-chosen buffers (DMA-bulk copy
+     * when the destination is in the uncacheable DMA buffer, plain
+     * memcpy in cache-baseline mode). */
+    publish_input(a, a_shadow, a_bytes);
+    publish_input(b, b_shadow, b_bytes);
+    free(a_shadow);
+    free(b_shadow);
+
+    /* Zero output (cacheable in both modes). */
+    memset(c, 0, c_bytes);
+
+    /* Cold-cache fair baseline: scrub L1+L2 so SPM and cache modes both
+     * face a DRAM-cold starting state in the measured ROI.  Without this
+     * the cache baseline gets an unearned warmup bonus from the init /
+     * reference phase, which biases comparisons against SPM. */
+    flush_caches();
+
+    /* Measure only the Triton kernel ROI; init/ref/publish stay outside. */
     m5_reset_stats(0, 0);
 
     /* Launch Triton kernel over the 1-D grid. */
