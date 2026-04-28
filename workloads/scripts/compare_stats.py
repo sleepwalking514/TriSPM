@@ -4,7 +4,7 @@
 Inputs are explicit ROI stats files (one per mode); paths come from
 trispm_paths.roi_stats_path. Two outputs:
   - compare table:  symmetric SPM vs cache signals (cycles, IPC, miss rates,
-                    SIMD activity). One file per (kernel, tag).
+                    snoop traffic, SIMD activity). One file per (kernel, tag).
   - spm_stats table: SPM-only counters (DMA traffic/latency/stalls, bank
                     conflict, per-port bandwidth). Has no cache counterpart,
                     so it lives next to compare.txt rather than inside it.
@@ -25,6 +25,14 @@ COMPARE_FIELDS = [
     ("l1d.demandMissRate", "system.l1d.demandMissRate::total"),
     ("l2.demandMisses", "system.l2cache.demandMisses::total"),
     ("l2.demandMissRate", "system.l2cache.demandMissRate::total"),
+    ("l2bus.snoops", "system.l2bus.snoops"),
+    ("l2bus.snoopTraffic", "system.l2bus.snoopTraffic"),
+    ("l2bus.snoopFilterRequests", "system.l2bus.snoop_filter.totRequests"),
+    ("l2bus.snoopFilterSnoops", "system.l2bus.snoop_filter.totSnoops"),
+    ("membus.snoops", "system.membus.snoops"),
+    ("membus.snoopTraffic", "system.membus.snoopTraffic"),
+    ("membus.snoopFilterRequests", "system.membus.snoop_filter.totRequests"),
+    ("membus.snoopFilterSnoops", "system.membus.snoop_filter.totSnoops"),
     ("issued.SimdFloatMultAcc", "system.cpu.issuedInstType_0::SimdFloatMultAcc"),
     ("issued.MemRead", "system.cpu.issuedInstType_0::MemRead"),
     ("issued.MemWrite", "system.cpu.issuedInstType_0::MemWrite"),
@@ -108,6 +116,10 @@ def as_number(value: str | None) -> float | None:
         return None
 
 
+def is_integer_text(value: str | None) -> bool:
+    return value is not None and value.lstrip("+-").isdigit()
+
+
 def fmt(value: str | None) -> str:
     return "-" if value is None else value
 
@@ -119,7 +131,11 @@ def fmt_delta(spm_value: str | None, cache_value: str | None) -> str:
         return "-"
     delta = spm_num - cache_num
     # Use float formatting for fractional stats (rates, IPC), integer otherwise.
-    delta_str = f"{delta:+.4f}" if abs(delta) < 1 else f"{delta:+.0f}"
+    delta_str = (
+        f"{delta:+.0f}"
+        if is_integer_text(spm_value) and is_integer_text(cache_value)
+        else f"{delta:+.4f}" if abs(delta) < 1 else f"{delta:+.0f}"
+    )
     if cache_num == 0:
         return delta_str
     return f"{delta_str} ({delta / cache_num:+.1%})"
