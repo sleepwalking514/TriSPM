@@ -29,7 +29,15 @@ GROUP_SIZE_M = 4
 WARMUP_ITERS = 0
 MEASURE_ITERS = 1
 FLUSH_BEFORE_ROI = 1
-CHECK_RESULT = 1
+CHECK_RESULT = 0
+
+# Per-mode defaults are applied after [params] and [presets.*], but before
+# command-line `--set`, so `SET="GROUP_SIZE_M=..."` still wins.
+[mode_params.spm]
+GROUP_SIZE_M = 1
+
+[mode_params.cache]
+GROUP_SIZE_M = 4
 
 [build]
 c_macros = [

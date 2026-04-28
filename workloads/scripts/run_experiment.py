@@ -37,13 +37,20 @@ def load_manifest(kernel: str) -> dict:
     return tomllib.loads(path.read_text())
 
 
-def merged_params(manifest: dict, preset: str | None, overrides: dict[str, str]) -> dict[str, str]:
+def merged_params(
+    manifest: dict,
+    preset: str | None,
+    overrides: dict[str, str],
+    mode: str | None = None,
+) -> dict[str, str]:
     params: dict = dict(manifest.get("params", {}))
     if preset:
         preset_params = manifest.get("presets", {}).get(preset)
         if preset_params is None:
             sys.exit(f"ERROR: preset {preset!r} not in manifest")
         params.update(preset_params)
+    if mode:
+        params.update(manifest.get("mode_params", {}).get(mode, {}))
     params.update(overrides)
     return {k: str(v) for k, v in params.items()}
 
@@ -136,9 +143,10 @@ def execute_one(
     params: dict[str, str],
     tag: str,
     mode: str,
+    preset: str | None,
+    overrides: dict[str, str],
     skip_build: bool,
 ) -> None:
-    env = export_env(manifest, params)
     cache_gem5_flags = ["--cache_baseline"]
 
     # (run_mode, gem5_flags, do_run?)
@@ -152,6 +160,8 @@ def execute_one(
     }[mode]
 
     for run_mode, gem5_flags, should_run in targets:
+        target_params = merged_params(manifest, preset, overrides, mode=run_mode)
+        env = export_env(manifest, target_params)
         if not skip_build:
             do_build(kernel, run_mode, tag, env)
         if should_run:
@@ -195,12 +205,14 @@ def main() -> None:
             base_tag = args.tag or render_tag(sweep.get("tag_template"), params, default=f"{axis.lower()}{value}")
             tag = base_tag if args.tag else apply_preset_to_tag(base_tag, args.preset)
             print(f"\n========== sweep {args.sweep}: {axis}={value} (tag={tag}) ==========")
-            execute_one(args.kernel, manifest, params, tag, args.mode, args.skip_build)
+            execute_one(args.kernel, manifest, params, tag, args.mode,
+                        args.preset, sweep_overrides, args.skip_build)
         return
 
     params = merged_params(manifest, args.preset, overrides)
     tag = args.tag or default_tag(manifest, params, args.preset)
-    execute_one(args.kernel, manifest, params, tag, args.mode, args.skip_build)
+    execute_one(args.kernel, manifest, params, tag, args.mode,
+                args.preset, overrides, args.skip_build)
 
 
 if __name__ == "__main__":
