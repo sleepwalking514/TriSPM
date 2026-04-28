@@ -2,7 +2,12 @@
 """Print a compact SPM-vs-cache delta table from two gem5 stats dumps.
 
 Inputs are explicit ROI stats files (one per mode); paths come from
-trispm_paths.roi_stats_path.
+trispm_paths.roi_stats_path. Two outputs:
+  - compare table:  symmetric SPM vs cache signals (cycles, IPC, miss rates,
+                    SIMD activity). One file per (kernel, tag).
+  - spm_stats table: SPM-only counters (DMA traffic/latency/stalls, bank
+                    conflict, per-port bandwidth). Has no cache counterpart,
+                    so it lives next to compare.txt rather than inside it.
 """
 
 from __future__ import annotations
@@ -11,28 +16,39 @@ import argparse
 from pathlib import Path
 
 
-FIELDS = [
+# (label, gem5 stat name) — symmetric signals where SPM and cache both make sense.
+COMPARE_FIELDS = [
     ("numCycles", "system.cpu.numCycles"),
     ("simInsts", "simInsts"),
-    ("simOps", "simOps"),
-    ("spm_dma.transfers", "system.spm_dma.transfers"),
-    ("spm_dma.bytes", "system.spm_dma.bytesTransferred"),
-    ("spm.bytesRead", "system.spm.bytesRead::total"),
-    ("spm.bankConflicts", "system.spm.bankConflicts"),
+    ("ipc", "system.cpu.ipc"),
     ("l1d.demandMisses", "system.l1d.demandMisses::total"),
-    ("l1d.overallMisses", "system.l1d.overallMisses::total"),
+    ("l1d.demandMissRate", "system.l1d.demandMissRate::total"),
     ("l2.demandMisses", "system.l2cache.demandMisses::total"),
-    ("l2.overallMisses", "system.l2cache.overallMisses::total"),
-    ("issued.SimdMisc", "system.cpu.issuedInstType_0::SimdMisc"),
+    ("l2.demandMissRate", "system.l2cache.demandMissRate::total"),
     ("issued.SimdFloatMultAcc", "system.cpu.issuedInstType_0::SimdFloatMultAcc"),
-    ("issued.SimdWholeRegLoad", "system.cpu.issuedInstType_0::SimdWholeRegisterLoad"),
-    ("issued.SimdWholeRegStore", "system.cpu.issuedInstType_0::SimdWholeRegisterStore"),
-    ("issued.SimdUnitLoad", "system.cpu.issuedInstType_0::SimdUnitStrideLoad"),
-    ("issued.SimdUnitStore", "system.cpu.issuedInstType_0::SimdUnitStrideStore"),
     ("issued.MemRead", "system.cpu.issuedInstType_0::MemRead"),
     ("issued.MemWrite", "system.cpu.issuedInstType_0::MemWrite"),
     ("issued.FloatMemRead", "system.cpu.issuedInstType_0::FloatMemRead"),
     ("issued.FloatMemWrite", "system.cpu.issuedInstType_0::FloatMemWrite"),
+]
+
+# (label, gem5 stat name) — SPM-only. Reported in spm_stats.txt.
+SPM_ONLY_FIELDS = [
+    ("spm_dma.transfers", "system.spm_dma.transfers"),
+    ("spm_dma.transfers2D", "system.spm_dma.transfers2D"),
+    ("spm_dma.bytes", "system.spm_dma.bytesTransferred"),
+    ("spm_dma.busyCycles", "system.spm_dma.busyCycles"),
+    ("spm_dma.avgLatency", "system.spm_dma.avgLatency"),
+    ("spm_dma.queueFullStalls", "system.spm_dma.queueFullStalls"),
+    ("spm_dma.waitStallCycles", "system.spm_dma.waitStallCycles"),
+    ("spm_dma.avgWaitStallCycles", "system.spm_dma.avgWaitStallCycles"),
+    ("spm_dma.waitPollBusy", "system.spm_dma.waitPollBusy"),
+    ("spm_dma.waitPollIdle", "system.spm_dma.waitPollIdle"),
+    ("spm.bytesRead", "system.spm.bytesRead::total"),
+    ("spm.bytesWritten", "system.spm.bytesWritten::total"),
+    ("spm.numReads", "system.spm.numReads::total"),
+    ("spm.numWrites", "system.spm.numWrites::total"),
+    ("spm.bankConflicts", "system.spm.bankConflicts"),
 ]
 
 
@@ -102,17 +118,28 @@ def fmt_delta(spm_value: str | None, cache_value: str | None) -> str:
     if spm_num is None or cache_num is None:
         return "-"
     delta = spm_num - cache_num
+    # Use float formatting for fractional stats (rates, IPC), integer otherwise.
+    delta_str = f"{delta:+.4f}" if abs(delta) < 1 else f"{delta:+.0f}"
     if cache_num == 0:
-        return f"{delta:+.0f}"
-    return f"{delta:+.0f} ({delta / cache_num:+.1%})"
+        return delta_str
+    return f"{delta_str} ({delta / cache_num:+.1%})"
 
 
-def print_summary(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> None:
-    print(render_summary(spm, cache, measure_iters))
+def render_table(rows: list[tuple[str, ...]], headers: tuple[str, ...]) -> str:
+    widths = [
+        max(len(headers[i]), *(len(row[i]) for row in rows))
+        for i in range(len(headers))
+    ]
+    fmt_row = lambda row: "  ".join(
+        (cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i]))
+        for i, cell in enumerate(row)
+    )
+    sep = "  ".join("-" * w for w in widths)
+    return "\n".join([fmt_row(headers), sep] + [fmt_row(r) for r in rows])
 
 
-def render_summary(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> str:
-    rows = []
+def render_compare(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> str:
+    rows: list[tuple[str, ...]] = []
     if measure_iters > 1:
         spm_cycles = as_number(spm.get("system.cpu.numCycles"))
         cache_cycles = as_number(cache.get("system.cpu.numCycles"))
@@ -125,26 +152,32 @@ def render_summary(spm: dict[str, str], cache: dict[str, str], measure_iters: in
                 None if cache_cycles is None else str(cache_cycles / measure_iters),
             ),
         ))
-    for label, stat_name in FIELDS:
+    for label, stat_name in COMPARE_FIELDS:
         spm_value = spm.get(stat_name)
         cache_value = cache.get(stat_name)
         rows.append((label, fmt(spm_value), fmt(cache_value), fmt_delta(spm_value, cache_value)))
+    return render_table(rows, ("stat", "spm", "cache", "delta"))
 
-    widths = [
-        max(len("stat"), *(len(row[0]) for row in rows)),
-        max(len("spm"), *(len(row[1]) for row in rows)),
-        max(len("cache"), *(len(row[2]) for row in rows)),
-        max(len("delta"), *(len(row[3]) for row in rows)),
-    ]
 
-    header = ("stat", "spm", "cache", "delta")
-    lines = [
-        f"{header[0]:<{widths[0]}}  {header[1]:>{widths[1]}}  {header[2]:>{widths[2]}}  {header[3]:>{widths[3]}}",
-        f"{'-' * widths[0]}  {'-' * widths[1]}  {'-' * widths[2]}  {'-' * widths[3]}",
-    ]
-    for row in rows:
-        lines.append(f"{row[0]:<{widths[0]}}  {row[1]:>{widths[1]}}  {row[2]:>{widths[2]}}  {row[3]:>{widths[3]}}")
-    return "\n".join(lines)
+def render_spm_only(spm: dict[str, str], total_cycles: float | None) -> str:
+    rows: list[tuple[str, ...]] = []
+    busy = as_number(spm.get("system.spm_dma.busyCycles"))
+    if busy is not None and total_cycles and total_cycles > 0:
+        rows.append((
+            "spm_dma.busyFraction",
+            f"{busy / total_cycles:.4f}",
+            "fraction of CPU cycles DMA was busy",
+        ))
+    wait = as_number(spm.get("system.spm_dma.waitStallCycles"))
+    if wait is not None and total_cycles and total_cycles > 0:
+        rows.append((
+            "spm_dma.waitFraction",
+            f"{wait / total_cycles:.4f}",
+            "fraction of CPU cycles spent in spm.dma.w polling",
+        ))
+    for label, stat_name in SPM_ONLY_FIELDS:
+        rows.append((label, fmt(spm.get(stat_name)), ""))
+    return render_table(rows, ("stat", "value", "note"))
 
 
 def main() -> None:
@@ -163,20 +196,31 @@ def main() -> None:
         default=1,
         help="kernel launches inside the measured ROI; prints avgCycles/iter when >1",
     )
-    parser.add_argument("--output", type=Path, default=None, help="write table to file instead of stdout")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="write compare table to file instead of stdout")
+    parser.add_argument("--spm-only-output", type=Path, default=None,
+                        help="also write SPM-only signals (DMA, banks, ...) to this path")
     parser.add_argument("--quiet", action="store_true", help="do not print when writing --output")
     args = parser.parse_args()
 
     spm = load_stats(args.spm, args.section)
     cache = load_stats(args.cache, args.section)
-    summary = render_summary(spm, cache, args.measure_iters)
+    compare_text = render_compare(spm, cache, args.measure_iters)
+
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(summary + "\n")
+        args.output.write_text(compare_text + "\n")
         if not args.quiet:
             print(f"Compare table written to {args.output}")
     else:
-        print(summary)
+        print(compare_text)
+
+    if args.spm_only_output:
+        spm_only_text = render_spm_only(spm, as_number(spm.get("system.cpu.numCycles")))
+        args.spm_only_output.parent.mkdir(parents=True, exist_ok=True)
+        args.spm_only_output.write_text(spm_only_text + "\n")
+        if not args.quiet:
+            print(f"SPM-only stats written to {args.spm_only_output}")
 
 
 if __name__ == "__main__":

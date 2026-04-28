@@ -1,0 +1,10 @@
+[kernel]
+name = "vector_add"
+env_prefix = ""
+# Flat tag — vector_add only sweeps SIZE, no need for a 2-level tree.
+tag_template = "n{SIZE}-bs{BLOCK_SIZE}"
+
+[params]
+SIZE = 4096
+BLOCK_SIZE = 64
+CHECK_RESULT = 1

@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/../env.sh"
 
 KERNEL=""
 MODE=""
-TAG="default"
+TAG=""
 GEM5_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -28,6 +28,7 @@ done
 
 [ -n "$KERNEL" ] || { echo "Usage: $0 <kernel> --mode {spm,cache} [--tag TAG] [gem5_flags...]" >&2; exit 2; }
 [ "$MODE" = "spm" ] || [ "$MODE" = "cache" ] || { echo "--mode must be spm or cache" >&2; exit 2; }
+[ -n "$TAG" ] || { echo "--tag is required (driver renders it from experiment.toml)" >&2; exit 2; }
 
 BINARY="$(python3 "$SCRIPT_DIR/trispm_paths.py" binary "$KERNEL" "$MODE" --tag "$TAG")"
 M5OUT_DIR="$(python3 "$SCRIPT_DIR/trispm_paths.py" m5out_dir "$KERNEL" "$MODE" --tag "$TAG")"

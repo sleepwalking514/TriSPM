@@ -31,7 +31,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
 def load_manifest(kernel: str) -> dict:
-    path = WORKLOADS_DIR / kernel / "experiment.toml"
+    path = WORKLOADS_DIR / "kernels" / kernel / "experiment.toml"
     if not path.is_file():
         sys.exit(f"ERROR: manifest not found: {path}")
     return tomllib.loads(path.read_text())
@@ -82,6 +82,7 @@ def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
     spm_stats = trispm_paths.roi_stats_path(kernel, "spm", tag)
     cache_stats = trispm_paths.roi_stats_path(kernel, "cache", tag)
     compare = trispm_paths.compare_path(kernel, tag)
+    spm_only = trispm_paths.spm_stats_path(kernel, tag)
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "compare_stats.py"),
@@ -89,14 +90,21 @@ def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
         "--cache", str(cache_stats),
         "--measure-iters", str(measure_iters),
         "--output", str(compare),
+        "--spm-only-output", str(spm_only),
         "--quiet",
     ]
     run(cmd, echo=False)
-    print(f"Compare saved: {rel_workloads_path(compare)}")
+    print(f"Compare saved:  {rel_workloads_path(compare)}")
+    print(f"SPM-only saved: {rel_workloads_path(spm_only)}")
 
 
-def render_tag(template: str | None, params: dict[str, str], default: str) -> str:
+def render_tag(template: str | None, params: dict[str, str], default: str | None) -> str:
     if not template:
+        if default is None:
+            sys.exit(
+                "ERROR: kernel manifest has no tag_template and no fallback was supplied. "
+                "Add `tag_template = \"...\"` under [kernel] in experiment.toml."
+            )
         return default
     return template.format(**params)
 
@@ -105,6 +113,11 @@ def apply_preset_to_tag(tag: str, preset: str | None) -> str:
     if not preset:
         return tag
     return f"{preset}-{tag}"
+
+
+def default_tag(manifest: dict, params: dict[str, str], preset: str | None) -> str:
+    base_tag = render_tag(manifest["kernel"].get("tag_template"), params, default=None)
+    return apply_preset_to_tag(base_tag, preset)
 
 
 def execute_one(
@@ -118,16 +131,21 @@ def execute_one(
     env = export_env(manifest, params)
     cache_gem5_flags = ["--cache_baseline"]
 
+    # (run_mode, gem5_flags, do_run?)
     targets = {
-        "spm": [("spm", [])],
-        "cache": [("cache", cache_gem5_flags)],
-        "compare": [("spm", []), ("cache", cache_gem5_flags)],
+        "spm":     [("spm",   [],                True)],
+        "cache":   [("cache", cache_gem5_flags,  True)],
+        "compare": [("spm",   [],                True),
+                    ("cache", cache_gem5_flags,  True)],
+        "build":   [("spm",   [],                False),
+                    ("cache", cache_gem5_flags,  False)],
     }[mode]
 
-    for run_mode, gem5_flags in targets:
+    for run_mode, gem5_flags, should_run in targets:
         if not skip_build:
             do_build(kernel, run_mode, tag, env)
-        do_run(kernel, run_mode, tag, gem5_flags, env)
+        if should_run:
+            do_run(kernel, run_mode, tag, gem5_flags, env)
 
     if mode == "compare":
         do_compare(kernel, tag, int(params.get("MEASURE_ITERS", "1")))
@@ -136,7 +154,7 @@ def execute_one(
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("kernel")
-    p.add_argument("--mode", choices=("spm", "cache", "compare"), default="compare")
+    p.add_argument("--mode", choices=("spm", "cache", "compare", "build"), default="compare")
     p.add_argument("--tag", default=None, help="override artifact tag")
     p.add_argument("--preset", default=None, help="apply [presets.<name>] from manifest")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VAL",
@@ -171,7 +189,7 @@ def main() -> None:
         return
 
     params = merged_params(manifest, args.preset, overrides)
-    tag = args.tag or (args.preset if args.preset else "default")
+    tag = args.tag or default_tag(manifest, params, args.preset)
     execute_one(args.kernel, manifest, params, tag, args.mode, args.skip_build)
 
 

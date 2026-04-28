@@ -1,8 +1,8 @@
 # Experiment manifest for matmul.
 #
-# `params` are forwarded to kernel.py (Python) and harness.c (via -D macros)
-# as MATMUL_<UPPER_KEY> env vars. The build script also exports them so
-# config.sh-style sourcing keeps working.
+# `params` are exported as MATMUL_<UPPER_KEY> env vars (per [kernel].env_prefix).
+# kernel.py reads them directly; harness.c picks them up via the -D mapping
+# in config.sh. Defaults live here — config.sh has no fallbacks.
 #
 # `sweeps` defines named sweep dimensions consumed by run_experiment.py.
 
@@ -11,6 +11,12 @@ name = "matmul"
 # Env var prefix prepended to each [params] key when exporting to
 # kernel.py / config.sh. matmul's kernel.py reads MATMUL_M etc.
 env_prefix = "MATMUL_"
+# Slashes in tag_template create m5out subdirectories
+# (m5out/matmul/<MxNxK>/<bsMxbsNxbsK>/{spm,cache,compare.txt}).
+# Build dirs flatten the slashes back to '-' since they're intermediate.
+# GROUP_SIZE_M and other tuning knobs stay in [params] only — promote
+# them into the tag if they ever become a sweep axis.
+tag_template = "{M}x{N}x{K}/{BLOCK_SIZE_M}x{BLOCK_SIZE_N}x{BLOCK_SIZE_K}"
 
 [params]
 M = 256
@@ -31,9 +37,8 @@ WARMUP_ITERS = 2
 MEASURE_ITERS = 5
 FLUSH_BEFORE_ROI = 0
 
-# tag = "n{N}-bs{BLOCK_SIZE_M}" — used by --sweep size to label runs.
 [sweeps.size]
 axis = "N"
 values = [128, 256]
 mirror = ["M", "K"]   # set M=K=N for each value
-tag_template = "n{N}-bs{BLOCK_SIZE_M}"
+tag_template = "{M}x{N}x{K}/{BLOCK_SIZE_M}x{BLOCK_SIZE_N}x{BLOCK_SIZE_K}"

@@ -1,8 +1,0 @@
-[kernel]
-name = "vector_add"
-env_prefix = ""
-
-[params]
-SIZE = 4096
-BLOCK_SIZE = 64
-CHECK_RESULT = 1

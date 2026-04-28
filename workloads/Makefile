@@ -15,15 +15,21 @@
 #   make sweep-matmul SWEEP=size [PRESET=steady] [SET="CHECK_RESULT=0"]
 #
 # Compare output:
-#   workloads/m5out/<kernel>/<tag>/compare.txt
+#   workloads/m5out/<kernel>/<tag>/compare.txt   SPM-vs-cache delta
+#   workloads/m5out/<kernel>/<tag>/spm_stats.txt SPM-only signals (DMA, banks)
+#
+# <tag> is rendered from each kernel's experiment.toml [kernel].tag_template.
+# Slashes in the template become subdirectories — matmul uses
+# "{M}x{N}x{K}/{bsM}x{bsN}x{bsK}" so its tree is shape/tile/. Build dirs
+# stay flat (slashes collapse to '-').
 #
 # matmul sweep=size:
 #   values come from matmul/experiment.toml [sweeps.size].
-#   It mirrors N into M and K, then tags runs as n<N>-bs<BLOCK_SIZE_M>.
-#   With PRESET=steady, tags are prefixed as steady-n<N>-bs<BLOCK_SIZE_M>.
+#   It mirrors N into M and K, then tags runs as <MxNxK>/<bsMxbsNxbsK>.
+#   With PRESET=steady, tags are prefixed as steady-<MxNxK>/<bsMxbsNxbsK>.
 #
 #   make all                    build all kernels (spm + cache)
-#   make clean                  rm -rf workloads/build workloads/m5out
+#   make clean                  rm -rf workloads/build
 # ============================================================
 
 KERNELS := vector_add matmul layer_norm
@@ -49,8 +55,7 @@ all: $(BUILD_TARGETS)
 
 # Build both spm + cache binaries; no gem5 run.
 $(BUILD_TARGETS): build-%:
-	@./scripts/build_kernel.sh $* --mode spm
-	@./scripts/build_kernel.sh $* --mode cache
+	@$(DRIVER) $* --mode build $(PRESET_FLAG) $(SET_FLAG)
 
 # SPM-only run (build + run).
 $(RUN_TARGETS): run-%:
@@ -66,5 +71,5 @@ $(SWEEP_TARGETS): sweep-%:
 	@$(DRIVER) $* --mode compare --sweep $(SWEEP) $(PRESET_FLAG) $(SET_FLAG)
 
 clean:
-	rm -rf build m5out
-	@echo "Removed workloads/build/ and workloads/m5out/."
+	rm -rf build
+	@echo "Removed workloads/build/."

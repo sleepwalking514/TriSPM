@@ -8,9 +8,10 @@
 #   ./scripts/build_kernel.sh matmul --mode cache --tag n256-bs32
 #
 # --mode cache: skip ConvertMemoryToSPM pass, build cache-baseline binary.
-# --tag:        artifact label; default "default". Build dir is
-#               workloads/build/<kernel>/<mode>-<tag>/ (single source of
-#               truth lives in scripts/trispm_paths.py).
+# --tag:        artifact label rendered from the kernel's experiment.toml
+#               tag_template (slashes are flattened to '-' in build dirs).
+#               Build dir is workloads/build/<kernel>/<mode>-<flat-tag>/
+#               (single source of truth lives in scripts/trispm_paths.py).
 # ============================================================
 set -euo pipefail
 
@@ -19,7 +20,7 @@ source "$SCRIPT_DIR/../env.sh"
 
 KERNEL=""
 MODE=""
-TAG="default"
+TAG=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --mode) MODE="$2"; shift 2 ;;
@@ -33,8 +34,9 @@ done
 
 [ -n "$KERNEL" ] || { echo "Usage: $0 <kernel> --mode {spm,cache} [--tag TAG]" >&2; exit 2; }
 [ "$MODE" = "spm" ] || [ "$MODE" = "cache" ] || { echo "--mode must be spm or cache" >&2; exit 2; }
+[ -n "$TAG" ] || { echo "--tag is required (driver renders it from experiment.toml)" >&2; exit 2; }
 
-KERNEL_DIR="$TRISPM_ROOT/workloads/$KERNEL"
+KERNEL_DIR="$TRISPM_ROOT/workloads/kernels/$KERNEL"
 [ -d "$KERNEL_DIR" ] || { echo "ERROR: kernel directory not found: $KERNEL_DIR" >&2; exit 1; }
 
 source "$KERNEL_DIR/config.sh"

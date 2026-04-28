@@ -2,12 +2,14 @@
 """Single source of truth for TriSPM workload artifact paths.
 
 Layout:
-  workloads/build/<kernel>/<spm|cache>-<tag>/   build artifacts (.llir, .s, _test, _launcher.c)
-  workloads/m5out/<kernel>/<tag>/<spm|cache>/   gem5 outdir + stats.txt + roi-stats.txt
-  workloads/m5out/<kernel>/<tag>/compare.txt    SPM-vs-cache delta table
+  workloads/build/<kernel>/<spm|cache>-<flat-tag>/   build artifacts (.llir, .s, _test, _launcher.c)
+  workloads/m5out/<kernel>/<tag>/<spm|cache>/        gem5 outdir + stats.txt + roi-stats.txt
+  workloads/m5out/<kernel>/<tag>/compare.txt         SPM-vs-cache delta table
+  workloads/m5out/<kernel>/<tag>/spm_stats.txt       SPM-only signals (DMA, banks, ...)
 
-The shell scripts call this module with `--print` to avoid duplicating the
-naming logic in bash.
+Tags may contain '/' to create m5out subdirectories (e.g.
+matmul uses "{M}x{N}x{K}/{bsM}x{bsN}x{bsK}"). Build dirs flatten any
+slashes to '-' since they are intermediate artifacts.
 """
 from __future__ import annotations
 
@@ -26,39 +28,50 @@ def _check_mode(mode: str) -> None:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
 
 
-def build_dir(kernel: str, mode: str, tag: str = "default") -> Path:
+def _flat_tag(tag: str) -> str:
+    """Collapse '/' into '-' for filesystem-flat build dir names."""
+    return tag.replace("/", "-")
+
+
+def build_dir(kernel: str, mode: str, tag: str) -> Path:
     _check_mode(mode)
-    return BUILD_ROOT / kernel / f"{mode}-{tag}"
+    return BUILD_ROOT / kernel / f"{mode}-{_flat_tag(tag)}"
 
 
-def binary_path(kernel: str, mode: str, tag: str = "default") -> Path:
+def binary_path(kernel: str, mode: str, tag: str) -> Path:
     return build_dir(kernel, mode, tag) / f"{kernel}_test"
 
 
-def m5out_dir(kernel: str, mode: str, tag: str = "default") -> Path:
+def m5out_dir(kernel: str, mode: str, tag: str) -> Path:
     _check_mode(mode)
     return M5OUT_ROOT / kernel / tag / mode
 
 
-def roi_stats_path(kernel: str, mode: str, tag: str = "default") -> Path:
+def roi_stats_path(kernel: str, mode: str, tag: str) -> Path:
     """Filtered stats containing only the explicit ROI dump."""
     return m5out_dir(kernel, mode, tag) / "roi-stats.txt"
 
 
-def compare_path(kernel: str, tag: str = "default") -> Path:
+def compare_path(kernel: str, tag: str) -> Path:
     return M5OUT_ROOT / kernel / tag / "compare.txt"
+
+
+def spm_stats_path(kernel: str, tag: str) -> Path:
+    """SPM-only signals (DMA traffic, bank conflicts, etc.) — no cache counterpart."""
+    return M5OUT_ROOT / kernel / tag / "spm_stats.txt"
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("what", choices=["build_dir", "binary", "m5out_dir", "roi_stats", "compare"])
+    p.add_argument("what", choices=["build_dir", "binary", "m5out_dir", "roi_stats", "compare", "spm_stats"])
     p.add_argument("kernel")
     p.add_argument("mode", nargs="?", choices=MODES)
-    p.add_argument("--tag", default="default")
+    p.add_argument("--tag", required=True)
     args = p.parse_args()
 
-    if args.what == "compare":
-        print(compare_path(args.kernel, args.tag))
+    if args.what in ("compare", "spm_stats"):
+        fns = {"compare": compare_path, "spm_stats": spm_stats_path}
+        print(fns[args.what](args.kernel, args.tag))
     else:
         if args.mode is None:
             p.error(f"{args.what} requires mode to be one of {MODES}")
