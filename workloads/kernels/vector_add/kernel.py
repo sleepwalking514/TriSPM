@@ -8,15 +8,22 @@ Env vars (set by build_kernel.sh via env.sh before this script runs):
 The Triton runtime writes <kernel_name>.llir and <kernel_name>_launcher.{c,h}
 directly to KERNEL_AUX_FILE_DIR.  No manual cache extraction needed.
 """
+import os
+
 import torch
 import triton
 import triton.language as tl
 
-# Must match config.sh.  With VLEN=256 (8 x float), BLOCK_SIZE=64 maps
-# to a single LMUL=8 vector register group — the largest RVV grouping.
-BLOCK_SIZE = 64
-SIZE = 4096
-GRID_X = SIZE // BLOCK_SIZE  # 64
+def env_int(name: str) -> int:
+    value = os.getenv(name)
+    if value is None:
+        raise RuntimeError(f"{name} must be exported from experiment.toml by run_experiment.py")
+    return int(value)
+
+
+SIZE = env_int("SIZE")
+BLOCK_SIZE = env_int("BLOCK_SIZE")
+GRID_X = (SIZE + BLOCK_SIZE - 1) // BLOCK_SIZE
 
 
 @triton.jit

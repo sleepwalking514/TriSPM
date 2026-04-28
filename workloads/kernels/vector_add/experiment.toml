@@ -8,3 +8,10 @@ tag_template = "n{SIZE}-bs{BLOCK_SIZE}"
 SIZE = 4096
 BLOCK_SIZE = 64
 CHECK_RESULT = 1
+
+[build]
+c_macros = [
+    "SIZE={SIZE}",
+    "BLOCK_SIZE={BLOCK_SIZE}",
+    "CHECK_RESULT={CHECK_RESULT}",
+]

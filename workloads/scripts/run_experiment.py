@@ -48,12 +48,22 @@ def merged_params(manifest: dict, preset: str | None, overrides: dict[str, str])
     return {k: str(v) for k, v in params.items()}
 
 
+def render_cflags(manifest: dict, params: dict[str, str]) -> str:
+    """Render C preprocessor flags declared by the kernel manifest."""
+    macros = manifest.get("build", {}).get("c_macros", [])
+    try:
+        return " ".join(f"-D{macro.format(**params)}" for macro in macros)
+    except KeyError as e:
+        sys.exit(f"ERROR: [build].c_macros references unknown param {e.args[0]!r}")
+
+
 def export_env(manifest: dict, params: dict[str, str]) -> dict[str, str]:
-    """Return env with manifest params exported as <PREFIX><KEY>."""
+    """Return env with manifest params and rendered C build flags exported."""
     prefix = manifest["kernel"].get("env_prefix", "")
     env = os.environ.copy()
     for k, v in params.items():
         env[f"{prefix}{k}"] = v
+    env["KERNEL_CFLAGS"] = render_cflags(manifest, params)
     return env
 
 

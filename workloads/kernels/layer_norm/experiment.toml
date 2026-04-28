@@ -7,3 +7,10 @@ tag_template = "{M_SIZE}x{N_SIZE}"
 M_SIZE = 32
 N_SIZE = 64
 CHECK_RESULT = 1
+
+[build]
+c_macros = [
+    "M_SIZE={M_SIZE}",
+    "N_SIZE={N_SIZE}",
+    "CHECK_RESULT={CHECK_RESULT}",
+]

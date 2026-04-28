@@ -8,8 +8,8 @@
 /*
  * Test harness for the Triton-compiled layer_norm kernel.
  *
- * Build with -DM_SIZE=32 -DN_SIZE=64 (injected by build_kernel.sh
- * from config.sh).
+ * Build with -DM_SIZE=32 -DN_SIZE=64 (rendered from experiment.toml
+ * by run_experiment.py).
  */
 
 #ifndef M_SIZE

@@ -11,13 +11,20 @@ import torch
 import triton
 import triton.language as tl
 
-M = int(os.getenv("MATMUL_M", "64"))
-N = int(os.getenv("MATMUL_N", "64"))
-K = int(os.getenv("MATMUL_K", "64"))
-BLOCK_SIZE_M = int(os.getenv("MATMUL_BLOCK_SIZE_M", "16"))
-BLOCK_SIZE_N = int(os.getenv("MATMUL_BLOCK_SIZE_N", "16"))
-BLOCK_SIZE_K = int(os.getenv("MATMUL_BLOCK_SIZE_K", "16"))
-GROUP_SIZE_M = int(os.getenv("MATMUL_GROUP_SIZE_M", "4"))
+def env_int(name: str) -> int:
+    value = os.getenv(name)
+    if value is None:
+        raise RuntimeError(f"{name} must be exported from experiment.toml by run_experiment.py")
+    return int(value)
+
+
+M = env_int("MATMUL_M")
+N = env_int("MATMUL_N")
+K = env_int("MATMUL_K")
+BLOCK_SIZE_M = env_int("MATMUL_BLOCK_SIZE_M")
+BLOCK_SIZE_N = env_int("MATMUL_BLOCK_SIZE_N")
+BLOCK_SIZE_K = env_int("MATMUL_BLOCK_SIZE_K")
+GROUP_SIZE_M = env_int("MATMUL_GROUP_SIZE_M")
 
 if M % BLOCK_SIZE_M != 0 or N % BLOCK_SIZE_N != 0 or K % BLOCK_SIZE_K != 0:
     raise ValueError("matmul dimensions must be exact multiples of block sizes")

@@ -8,8 +8,8 @@
 /*
  * Test harness for the Triton-compiled vector_add kernel.
  *
- * Build with -DBLOCK_SIZE=64 -DSIZE=4096 (injected by build_kernel.sh
- * from config.sh).
+ * Build with -DBLOCK_SIZE=64 -DSIZE=4096 (rendered from experiment.toml
+ * by run_experiment.py).
  *
  * The generated launcher (vector_add_launcher.c) handles the grid
  * dispatch loop and the extern kernel declaration, so the harness

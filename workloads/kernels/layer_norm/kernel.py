@@ -10,14 +10,23 @@ RISC-V vector register, LMUL=1 at VLEN=256).  This avoids two gem5 RVV bugs:
      register overlaps the source register group.
 Three-pass algorithm: mean, variance, normalize+store.
 """
+import os
+
 import torch
 import triton
 import triton.language as tl
 
-M = 32              # rows
-N = 64              # features per row
-BLOCK_SIZE_N = 8    # process N in chunks (LMUL=1 at VLEN=256)
-GRID_X = M          # one program per row
+def env_int(name: str) -> int:
+    value = os.getenv(name)
+    if value is None:
+        raise RuntimeError(f"{name} must be exported from experiment.toml by run_experiment.py")
+    return int(value)
+
+
+M = env_int("M_SIZE")        # rows
+N = env_int("N_SIZE")        # features per row
+BLOCK_SIZE_N = 8             # process N in chunks (LMUL=1 at VLEN=256)
+GRID_X = M                   # one program per row
 
 
 @triton.jit

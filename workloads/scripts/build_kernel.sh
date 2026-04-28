@@ -39,7 +39,10 @@ done
 KERNEL_DIR="$TRISPM_ROOT/workloads/kernels/$KERNEL"
 [ -d "$KERNEL_DIR" ] || { echo "ERROR: kernel directory not found: $KERNEL_DIR" >&2; exit 1; }
 
-source "$KERNEL_DIR/config.sh"
+if [ -z "${KERNEL_CFLAGS:-}" ]; then
+    echo "ERROR: KERNEL_CFLAGS is not set; build through scripts/run_experiment.py so experiment.toml params are exported." >&2
+    exit 1
+fi
 
 BUILD_DIR="$(python3 "$SCRIPT_DIR/trispm_paths.py" build_dir "$KERNEL" "$MODE" --tag "$TAG")"
 

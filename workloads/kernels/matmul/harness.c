@@ -10,7 +10,7 @@
  * Test harness for the Triton-compiled matmul kernel.
  *
  * Build with -DM=64 -DN=64 -DK=64 -DBLOCK_SIZE_M=16 -DBLOCK_SIZE_N=16
- * -DBLOCK_SIZE_K=16 (injected by build_kernel.sh from config.sh).
+ * -DBLOCK_SIZE_K=16 (rendered from experiment.toml by run_experiment.py).
  */
 
 #ifndef M
