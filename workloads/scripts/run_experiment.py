@@ -7,17 +7,21 @@ for the build, and orchestrates spm/cache/compare runs in a single command.
 Usage:
   run_experiment.py <kernel> --mode spm
   run_experiment.py <kernel> --mode compare [--preset steady]
+  run_experiment.py <kernel> --mode verify
   run_experiment.py <kernel> --sweep size [--preset steady]
 
 Modes:
   spm       build + run with SPM
   cache     build + run cache-baseline
   compare   build + run both, then save delta table
+  verify    build both, check LLIR for SPM markers + tier JSON
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -115,6 +119,77 @@ def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
     print(f"SPM-only saved: {rel_workloads_path(spm_only)}")
 
 
+def do_verify(kernel: str, tag: str) -> None:
+    """Check that SPM build has DMA/SPM markers and cache build does not."""
+    spm_dir = trispm_paths.build_dir(kernel, "spm", tag)
+    cache_dir = trispm_paths.build_dir(kernel, "cache", tag)
+
+    checks: list[tuple[str, bool]] = []
+    all_ok = True
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        nonlocal all_ok
+        status = "PASS" if ok else "FAIL"
+        suffix = f"  ({detail})" if detail else ""
+        print(f"  [{status}] {name}{suffix}")
+        checks.append((name, ok))
+        if not ok:
+            all_ok = False
+
+    print(f"\n===== verify-spm-fires: {kernel} (tag={tag}) =====")
+
+    # 1. SPM LLIR should contain addrspace(3) and fence iorw
+    spm_llir = spm_dir / f"{kernel}.llir"
+    if not spm_llir.is_file():
+        check("spm llir exists", False, str(spm_llir))
+    else:
+        text = spm_llir.read_text()
+        n_addrspace = len(re.findall(r"addrspace\(3\)", text))
+        n_fence = len(re.findall(r"fence iorw", text))
+        check("spm llir has addrspace(3)", n_addrspace > 0, f"count={n_addrspace}")
+        check("spm llir has fence iorw", n_fence > 0, f"count={n_fence}")
+
+    # 2. Cache LLIR should NOT contain these markers
+    cache_llir = cache_dir / f"{kernel}.llir"
+    if not cache_llir.is_file():
+        check("cache llir exists", False, str(cache_llir))
+    else:
+        text = cache_llir.read_text()
+        n_addrspace = len(re.findall(r"addrspace\(3\)", text))
+        n_fence = len(re.findall(r"fence iorw", text))
+        check("cache llir clean of addrspace(3)", n_addrspace == 0, f"count={n_addrspace}")
+        check("cache llir clean of fence iorw", n_fence == 0, f"count={n_fence}")
+
+    # 3. Tier JSON
+    tier_json = spm_dir / f"{kernel}_tiers.json"
+    if not tier_json.is_file():
+        check("tier json exists", False, str(tier_json))
+    else:
+        tiers = json.loads(tier_json.read_text())
+        non_empty = len(tiers) > 0
+        check("tier json non-empty", non_empty, json.dumps(tiers, separators=(",", ":")))
+
+    # 4. Launcher has alloc/free_all
+    launcher_c = spm_dir / f"{kernel}_launcher.c"
+    if not launcher_c.is_file():
+        check("launcher.c exists", False, str(launcher_c))
+    else:
+        text = launcher_c.read_text()
+        has_alloc = f"{kernel}_alloc" in text
+        has_free = f"{kernel}_free_all" in text
+        check(f"launcher has {kernel}_alloc", has_alloc)
+        check(f"launcher has {kernel}_free_all", has_free)
+
+    print()
+    if all_ok:
+        print(f"  {kernel}: ALL CHECKS PASSED")
+    else:
+        failed = [name for name, ok in checks if not ok]
+        print(f"  {kernel}: {len(failed)} CHECK(S) FAILED: {', '.join(failed)}")
+
+    return all_ok
+
+
 def render_tag(template: str | None, params: dict[str, str], default: str | None) -> str:
     if not template:
         if default is None:
@@ -157,6 +232,8 @@ def execute_one(
                     ("cache", cache_gem5_flags,  True)],
         "build":   [("spm",   [],                False),
                     ("cache", cache_gem5_flags,  False)],
+        "verify":  [("spm",   [],                False),
+                    ("cache", cache_gem5_flags,  False)],
     }[mode]
 
     for run_mode, gem5_flags, should_run in targets:
@@ -170,11 +247,16 @@ def execute_one(
     if mode == "compare":
         do_compare(kernel, tag, int(params.get("MEASURE_ITERS", "1")))
 
+    if mode == "verify":
+        ok = do_verify(kernel, tag)
+        if not ok:
+            sys.exit(1)
+
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("kernel")
-    p.add_argument("--mode", choices=("spm", "cache", "compare", "build"), default="compare")
+    p.add_argument("--mode", choices=("spm", "cache", "compare", "build", "verify"), default="compare")
     p.add_argument("--tag", default=None, help="override artifact tag")
     p.add_argument("--preset", default=None, help="apply [presets.<name>] from manifest")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VAL",

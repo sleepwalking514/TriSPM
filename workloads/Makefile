@@ -12,6 +12,8 @@
 #   make cmp-<kernel> PRESET=steady
 #   make cmp-<kernel> SET="CHECK_RESULT=0"
 #   make cmp-matmul SET="N=512 M=512 K=512 BLOCK_SIZE_M=64"
+#   make verify-<kernel>          check LLIR for SPM markers + tier JSON
+#   make verify                   verify all kernels (continues past failures)
 #   make sweep-matmul SWEEP=size [PRESET=steady] [SET="CHECK_RESULT=0"]
 #
 # Compare output:
@@ -44,12 +46,13 @@ DRIVER := python3 ./scripts/run_experiment.py
 PRESET_FLAG := $(if $(PRESET),--preset $(PRESET),)
 SET_FLAG    := $(foreach kv,$(SET),--set $(kv))
 
-BUILD_TARGETS := $(addprefix build-,$(KERNELS))
-RUN_TARGETS   := $(addprefix run-,$(KERNELS))
-CMP_TARGETS   := $(addprefix cmp-,$(KERNELS))
-SWEEP_TARGETS := $(addprefix sweep-,$(KERNELS))
+BUILD_TARGETS  := $(addprefix build-,$(KERNELS))
+RUN_TARGETS    := $(addprefix run-,$(KERNELS))
+CMP_TARGETS    := $(addprefix cmp-,$(KERNELS))
+SWEEP_TARGETS  := $(addprefix sweep-,$(KERNELS))
+VERIFY_TARGETS := $(addprefix verify-,$(KERNELS))
 
-.PHONY: all clean $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(SWEEP_TARGETS)
+.PHONY: all clean verify $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
 
 all: $(BUILD_TARGETS)
 
@@ -69,6 +72,23 @@ $(CMP_TARGETS): cmp-%:
 $(SWEEP_TARGETS): sweep-%:
 	@test -n "$(SWEEP)" || { echo "SWEEP=<name> required (see kernel's experiment.toml [sweeps.*])"; exit 2; }
 	@$(DRIVER) $* --mode compare --sweep $(SWEEP) $(PRESET_FLAG) $(SET_FLAG)
+
+# Verify SPM markers in LLIR + tier JSON + launcher (build-only, no gem5).
+$(VERIFY_TARGETS): verify-%:
+	@$(DRIVER) $* --mode verify $(PRESET_FLAG) $(SET_FLAG)
+
+# Verify all kernels (continues past individual failures, reports at end).
+verify:
+	@fail=0; \
+	for k in $(KERNELS); do \
+		$(DRIVER) $$k --mode verify $(PRESET_FLAG) $(SET_FLAG) || fail=$$((fail + 1)); \
+	done; \
+	echo ""; \
+	if [ $$fail -gt 0 ]; then \
+		echo "$$fail kernel(s) failed verify."; exit 1; \
+	else \
+		echo "All kernels passed verify."; \
+	fi
 
 clean:
 	rm -rf build
