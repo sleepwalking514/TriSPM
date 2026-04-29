@@ -13,6 +13,7 @@ trispm_paths.roi_stats_path. Two outputs:
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 
 
@@ -154,7 +155,19 @@ def render_table(rows: list[tuple[str, ...]], headers: tuple[str, ...]) -> str:
     return "\n".join([fmt_row(headers), sep] + [fmt_row(r) for r in rows])
 
 
-def render_compare(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> str:
+def write_csv(path: Path, rows: list[tuple[str, ...]], headers: tuple[str, ...]) -> None:
+    """Write rows with headers to a CSV file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        writer.writerows(rows)
+
+
+COMPARE_HEADERS: tuple[str, ...] = ("stat", "spm", "cache", "delta")
+
+
+def compare_rows(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> list[tuple[str, ...]]:
     rows: list[tuple[str, ...]] = []
     if measure_iters > 1:
         spm_cycles = as_number(spm.get("system.cpu.numCycles"))
@@ -172,10 +185,17 @@ def render_compare(spm: dict[str, str], cache: dict[str, str], measure_iters: in
         spm_value = spm.get(stat_name)
         cache_value = cache.get(stat_name)
         rows.append((label, fmt(spm_value), fmt(cache_value), fmt_delta(spm_value, cache_value)))
-    return render_table(rows, ("stat", "spm", "cache", "delta"))
+    return rows
 
 
-def render_spm_only(spm: dict[str, str], total_cycles: float | None) -> str:
+def render_compare(spm: dict[str, str], cache: dict[str, str], measure_iters: int) -> str:
+    return render_table(compare_rows(spm, cache, measure_iters), COMPARE_HEADERS)
+
+
+SPM_ONLY_HEADERS: tuple[str, ...] = ("stat", "value", "note")
+
+
+def spm_only_rows(spm: dict[str, str], total_cycles: float | None) -> list[tuple[str, ...]]:
     rows: list[tuple[str, ...]] = []
     busy = as_number(spm.get("system.spm_dma.busyCycles"))
     if busy is not None and total_cycles and total_cycles > 0:
@@ -193,7 +213,11 @@ def render_spm_only(spm: dict[str, str], total_cycles: float | None) -> str:
         ))
     for label, stat_name in SPM_ONLY_FIELDS:
         rows.append((label, fmt(spm.get(stat_name)), ""))
-    return render_table(rows, ("stat", "value", "note"))
+    return rows
+
+
+def render_spm_only(spm: dict[str, str], total_cycles: float | None) -> str:
+    return render_table(spm_only_rows(spm, total_cycles), SPM_ONLY_HEADERS)
 
 
 def main() -> None:
@@ -217,6 +241,10 @@ def main() -> None:
     parser.add_argument("--spm-only-output", type=Path, default=None,
                         help="also write SPM-only signals (DMA, banks, ...) to this path")
     parser.add_argument("--quiet", action="store_true", help="do not print when writing --output")
+    parser.add_argument("--csv", type=Path, default=None,
+                        help="write compare table as CSV to this path")
+    parser.add_argument("--spm-only-csv", type=Path, default=None,
+                        help="write SPM-only stats as CSV to this path")
     args = parser.parse_args()
 
     spm = load_stats(args.spm, args.section)
@@ -237,6 +265,17 @@ def main() -> None:
         args.spm_only_output.write_text(spm_only_text + "\n")
         if not args.quiet:
             print(f"SPM-only stats written to {args.spm_only_output}")
+
+    if args.csv:
+        write_csv(args.csv, compare_rows(spm, cache, args.measure_iters), COMPARE_HEADERS)
+        if not args.quiet:
+            print(f"Compare CSV written to {args.csv}")
+
+    if args.spm_only_csv:
+        total_cycles = as_number(spm.get("system.cpu.numCycles"))
+        write_csv(args.spm_only_csv, spm_only_rows(spm, total_cycles), SPM_ONLY_HEADERS)
+        if not args.quiet:
+            print(f"SPM-only CSV written to {args.spm_only_csv}")
 
 
 if __name__ == "__main__":
