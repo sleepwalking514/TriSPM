@@ -203,21 +203,25 @@ descriptor 会触发 queue full，并且当前实现会 drop descriptor。因此
 - GEMM loop 优先走 fused micro-scheduler，失败时回退旧 double-buffer path
 - B 以 window 为单位常驻 SPM，A 每次只 DMA `microM x BK`
 - accumulator full tile spill 到 SPM，在 micro-loop 之间保存
+- 默认 `microM=8`。初版 `microM=4` 正确但 descriptor/wait 偏多；
+  512³ 调参显示 `microM=8` 更优，`microM=16` build 可行但 gem5 明显变慢，
+  不作为默认。
 
 验证结果：
 
 | Case | 结果 |
 |---|---:|
 | 64³ / 32x32x32 / CHECK_RESULT=1 | PASS，4096/4096 正确 |
-| 64³ DMA transfers | 72 |
+| 64³ DMA transfers (`microM=8`) | 40 |
 | 64³ DMA bytes | 65,536 B |
-| 512³ / 64x64x32 / CHECK_RESULT=0 | 完成 |
-| 512³ cycles | 23,524,170 |
-| 512³ DMA transfers | 17,408 |
+| 512³ / 64x64x32 / CHECK_RESULT=0 (`microM=8`) | 完成 |
+| 512³ cycles | 18,652,222 |
+| 512³ vs cache cycles | -48.5% |
+| 512³ DMA transfers | 9,216 |
 | 512³ DMA bytes | 16 MiB |
 | 512³ queueFullStalls | 0 |
 
-512³ 的 transfers/bytes 与公式吻合。按同一公式，1024³ / 64x64x32
-应为 139,264 transfers、128 MiB DMA bytes。1024³ perf run 已能 build
+512³ 的 transfers/bytes 与公式吻合。按默认 `microM=8`，1024³ / 64x64x32
+应为 73,728 transfers、128 MiB DMA bytes。1024³ perf run 已能 build
 并进入 gem5，但 correctness-first 版本在大规模下仿真耗时过长，本轮先不把
 1024³ 完整 perf 作为阻塞项。
