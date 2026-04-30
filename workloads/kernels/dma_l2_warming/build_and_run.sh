@@ -6,7 +6,7 @@
 #
 # --buf-bytes N   Set BUF_BYTES (default 4096)
 # --build-only    Compile but don't run gem5
-# --sweep         Run the working-set sweep (32K, 128K, 512K, 2M)
+# --sweep         Run the working-set sweep (4K, 8K, 16K, 32K)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -52,12 +52,12 @@ run_one() {
     echo "===== Running dma_l2_warming (BUF_BYTES=$buf) on gem5 ====="
     $GEM5 --outdir="$mdir" \
         "$GEM5_RUN_SCRIPT" \
-        "$bdir/dma_l2_warming_test"
+        --binary "$bdir/dma_l2_warming_test"
     echo "  → stats: $mdir/stats.txt"
 }
 
 if [ "$SWEEP" -eq 1 ]; then
-    for sz in 32768 131072 524288 2097152; do
+    for sz in 4096 8192 16384 32768; do
         build_one "$sz"
         if [ "$BUILD_ONLY" -eq 0 ]; then
             run_one "$sz"
