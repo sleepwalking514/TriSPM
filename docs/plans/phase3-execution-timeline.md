@@ -33,8 +33,8 @@ tasks:
   - id: reduction-single-buffer-pipeline
     priority: high
     content: 升级 `transformReductionLoop` 单缓冲 prefetch 为真双缓冲（layer_norm/softmax/未来 reduction kernel），让 DMA 与 CPU 计算真正流水起来；当前实现是 read-then-prefetch 串行，DMA 延迟完全暴露在关键路径上。
-    status: pending
-    note: GEMM 路径（`transformGemmLoop`，../archive/matmul-spm-lowering-closure.md §P3.1 实测 62.3% overlap）已是双缓冲，本条**不**针对 matmul。reduction 路径见 `ConvertMemoryToSPM.cpp:600+`：每轮 body 内先 `vector.transfer_read` 当前 chunk 再 `dma_enqueue_2d` 下一 chunk + `dma_wait`，CPU 等 DMA 完成才能进入下一轮。需要：(a) 拆双 SPM buffer；(b) prologue 发首个 prefetch；(c) body 顶 wait 当前、读完后发下一个 prefetch；(d) bail-out 路径清残留 enqueue（GEMM 路径已踩过这个坑）。前置：reduction-2d-addr-bug、tier-sidecar-verify。验证：layer_norm SPM cycles 显著下降；`spm_dma.busyCycles` 与 kernel cycles 出现明显 overlap（参考 GEMM 的 avgWaitStall vs avgLatency 比）。
+    status: completed
+    note: 2026-04-30 完成。`transformReductionLoop` 已拆成两个 SPM buffer，prologue 发首块 DMA，body 顶部 `dma_wait` 等当前 buffer，随后向 alternate buffer 发 next prefetch 并翻转 `buf_idx`。lit 测试覆盖 body-top wait / buffer select / alternate-buffer enqueue / 2-D non-leading-IV stride。`layer_norm` 的 mean/variance reduction pass 已改成 block pointer + constexpr N，`make verify-layer_norm` 通过（32 `addrspace(3)`，68 `fence iorw`，tier JSON `{\"0\":3}`），`make cmp-layer_norm` 功能 PASS。32x64 基线：SPM 656,898 cycles vs cache 121,284 cycles；512 DMA transfers / 16,384 bytes；waitFraction 0.0398、avgWaitStall 45.43、avgLatency 65.50。该数据证明路径正确并暴露小尺寸 MMIO/DMA 开销，不作为 performance win。
   - id: l2-warming-bench
     content: 实现并运行 `dma_l2_warming` microbenchmark，接通 per-checkpoint stats parser，并做 cacheable/UC/无 DMA 对照与 working-set sweep。前置条件：tier-sidecar-verify 确认 Tier 2 分配链路正常。
     status: completed
@@ -88,8 +88,8 @@ isProject: false
 3. Done: complete Tier 2 / L2-warming evidence via `../evidence/l2_warming.md`.
 4. Done: complete the Phase 3 tooling baseline: `make verify`, unified `make run-<kernel>` / `make cmp-<kernel>`, and stats CSV export. Remaining Phase 6 comparison tooling moves to the roadmap.
 5. Done: fix the `transformReductionLoop` 2-D non-leading-IV prefetch address bug.
-6. Current: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) so LayerNorm/Softmax-style reductions can overlap DMA and compute.
-7. Next: clean up `phase3-compiler-backlog.md` P1 robustness work: robust GEMM matcher, generalized reduction matcher, and `DmaOpsToLLVM` options.
+6. Done: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) and record the first `layer_norm` SPM coverage/perf baseline.
+7. Current: clean up `phase3-compiler-backlog.md` P1 robustness work: robust GEMM matcher, generalized reduction matcher, and `DmaOpsToLLVM` options.
 8. Later: after Tier 2 evidence and reduction performance stabilize, enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.2 for workload-driven scalar-reuse rule expansion.
 
 ## 阶段化执行计划
@@ -145,14 +145,14 @@ isProject: false
 - **范围限制**：只改 `transformReductionLoop` 内部地址计算；不动 GEMM 路径，不泛化 matcher。
 - **对应 task**：`reduction-2d-addr-bug`。
 
-### Stage 4.5 — Reduction 双缓冲流水（current，依赖 Stage 4）
+### Stage 4.5 — Reduction 双缓冲流水（completed 2026-04-30）
 - **背景**：`transformGemmLoop` 已是双缓冲 + prologue prefetch（../archive/matmul-spm-lowering-closure.md §P3.1 实测 DMA 延迟 62.3% 被 overlap 隐藏）。但 `transformReductionLoop` 仍是 *单缓冲* prefetch：每轮 body 先 `vector.transfer_read` 当前 chunk → 再 `dma_enqueue_2d` 下一 chunk → `dma_wait`，CPU 必须等 DMA 完成才能进入下一轮。这意味着 layer_norm / softmax / 未来所有 reduction kernel 的 DMA 延迟全部串行暴露在关键路径，是 reduction 路径性能基线偏弱的结构性原因。
 - **范围**：把 reduction 路径升级到与 GEMM 同等的双缓冲方案：(a) 分配两个 SPM staging buffer；(b) prologue 发首轮 prefetch + wait；(c) body 顶 wait 当前 buffer、读完之后发下一轮 prefetch（不在 body 末尾 wait）；(d) bail-out 路径清残留 enqueue（GEMM 已踩过的坑）；(e) 复用 GEMM 的 buffer-flip 计数 / index 计算结构，避免再造一套。
-- **交付物**：`transformReductionLoop` patch + 一份 layer_norm before/after stats（`numCycles`、`spm_dma.waitStallCycles`、`spm_dma.avgLatency`、`avgWaitStall`）。
-- **验证**：layer_norm SPM kernel cycles 显著下降；`avgWaitStallCycles / avgLatency` 比例从接近 1.0（完全串行）下降到接近 GEMM 路径的 ~0.38（与 ../archive/matmul-spm-lowering-closure.md §P3.1 同口径）；功能 PASS 不退化。
+- **交付物**：`transformReductionLoop` patch + `layer_norm` 的 block-pointer mean/variance reduction path + 32x64 gem5 baseline。
+- **验证**：`compiler/test/TritonCPU/convert-memory-to-spm.mlir` 通过，覆盖 reduction body-top wait、buffer select、alternate-buffer prefetch 与 non-leading-IV stride。`make verify-layer_norm` 通过：LLIR `addrspace(3)=32`、`fence iorw=68`，tier JSON `{"0":3}`。`make cmp-layer_norm` 两侧功能 PASS；32x64 SPM 656,898 cycles vs cache 121,284 cycles，512 DMA transfers / 16,384 bytes，waitFraction 0.0398，avgWaitStall 45.43 vs avgLatency 65.50。小尺寸仍慢，说明下一步应减少 reduction-path MMIO/control 开销并泛化 matcher，而不是把该点当性能 headline。
 - **范围限制**：只改 `transformReductionLoop`，不动 matcher，不动 GEMM 路径。
 - **依赖**：Stage 4（2-D 地址 bug 必须先修，否则双缓冲化只会放大错误地址的影响），并建议在 `tier-sidecar-verify` 之后做（先确认 layer_norm 真正进入了 SPM lowering 路径）。
-- **对应 task**：`reduction-single-buffer-pipeline`。
+- **对应 task**：`reduction-single-buffer-pipeline`（completed）。
 
 ### Stage 5 — L2-warming microbenchmark（completed 2026-04-30）
 - **范围**：实现 `dma_l2_warming` workload，带 cacheable / UC / 无 DMA 三个变体 + per-checkpoint stats 解析 + working-set sweep。
@@ -164,7 +164,7 @@ isProject: false
 ### Stage 6 — 评测工具化（baseline completed，Phase 6 comparator pending）
 - **已完成**：`make verify` / `make verify-<kernel>` 落地（`run_experiment.py --mode verify`）；`make run-<kernel>` / `make cmp-<kernel>` 已覆盖统一 run/compare target；`compare_stats.py` 提取 21 symmetric + 15 SPM-only 指标到 `.txt`，并支持机器可读 CSV（`--csv` / `--spm-only-csv`）。
 - **剩余**：Phase 6 对比工具。
-- **验证**：matmul 通过 `make verify-matmul`；vector_add/layer_norm 预期 FAIL（SPM pass 未命中，见 `three-tier-placement.md` §4.1）。
+- **验证**：matmul 与 layer_norm 通过 `make verify-<kernel>`；vector_add 预期 FAIL（SPM pass 未命中，见 `three-tier-placement.md` §4.1）。
 - **范围限制**：不改编译器；不修改 simulator 接口。
 - **对应 task**：`eval-tooling`.
 

@@ -46,10 +46,8 @@ int main(void)
     for (int i = 0; i < M_SIZE * N_SIZE; i++)
         out[i] = 0.0f;
 
-    /* Launch kernel: grid_x = M (one program per row).
-     * N_SIZE is passed as a runtime arg (not constexpr) to prevent the
-     * Triton compiler from merging loop iterations into LMUL=8 ops. */
-    layer_norm_launch(M_SIZE, 1, 1, x, gamma, beta, out, N_SIZE);
+    /* Launch kernel: grid_x = M (one program per row). */
+    layer_norm_launch(M_SIZE, 1, 1, x, gamma, beta, out);
 
 #if CHECK_RESULT
     /* Reference layer-norm and verification. */

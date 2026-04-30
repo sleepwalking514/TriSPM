@@ -30,9 +30,10 @@ automatically:
   `vector_add`, and `layer_norm` pass functionally in both SPM and cache
   baseline modes.
 - SPM size defaults have been unified to 256 KiB across the current path.
-- Tier sidecar coverage has been audited; `matmul` is the current real SPM
+- Tier sidecar coverage has been audited; `matmul` is the mature real SPM
   workload, `vector_add` is intentionally not transformed, and `layer_norm`
-  needs reduction matcher work before it enters the SPM path.
+  now enters the SPM path for its single-load mean/variance reduction passes.
+  Its final normalize pass still needs multi-load reduction matcher work.
 - Tier 2 L2-warming has been verified by the `dma_l2_warming`
   microbenchmark; the 4K-32K working-set sweep confirms near-100% L2 hits
   after DMA and about 2.8x speedup over the cold scalar-read phase.
@@ -89,7 +90,11 @@ The MVP framework is landed. Coverage audit (2026-04-29, `make verify`) confirme
 
 - `matmul`: args 0,1 → Tier 3. LLIR has 583 `addrspace(3)` + 80 `fence iorw`. Working.
 - `vector_add`: empty tier JSON. Expected — single-block kernel with no loop, no tile reuse. SPM tiling has no benefit here.
-- `layer_norm`: empty tier JSON. Root cause: pointer arithmetic loads + reduction matcher only accepts 1 non-dot load, but layer_norm pass 3 has 3 loads (x, gamma, beta). Needs kernel rewrite to block pointers + reduction matcher generalization.
+- `layer_norm`: args 0 -> Tier 3 after rewriting the mean/variance
+  reduction passes to block pointers with constexpr `N`. LLIR has 32
+  `addrspace(3)` + 68 `fence iorw`; gem5 compare passes functionally.
+  Remaining: the final normalize loop still has 3 loads (x, gamma, beta)
+  and needs reduction matcher generalization.
 
 See `three-tier-placement.md` §4.1 for full analysis.
 
@@ -102,8 +107,13 @@ See `three-tier-placement.md` §4.1 for full analysis.
    `../evidence/l2_warming.md`.
 3. ~~Add Phase 6 tooling: `verify-spm-fires`, unified run/compare targets,
    and a stats CSV parser.~~ Done: `make verify` landed; `make run-<kernel>` / `make cmp-<kernel>` cover unified run/compare targets; `compare_stats.py` extracts metrics to `.txt` and CSV (`--csv` / `--spm-only-csv`). Remaining: Phase 6 comparison tooling.
-4. Upgrade reduction lowering from single-buffer prefetch to true
-   double-buffer pipelining after the 2-D address fix.
+4. ~~Upgrade reduction lowering from single-buffer prefetch to true
+   double-buffer pipelining after the 2-D address fix.~~ Done: the lit
+   test now verifies body-top wait + buffer flip + alternate-buffer
+   prefetch, and `make cmp-layer_norm` passes with real SPM markers.
+   Baseline 32x64 result: SPM 656,898 cycles vs cache 121,284 cycles,
+   512 DMA transfers / 16,384 bytes, waitFraction 0.0398. This is a
+   correctness/coverage baseline, not a performance win.
 5. Clean up compiler robustness:
    derive GEMM A/B identity and K dimension from `vector.contract` indexing
    maps, generalize reduction matching to multiple loads sharing the loop IV,
