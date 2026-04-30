@@ -1,8 +1,8 @@
 # TriSPM Compiler — Phase 3 Current Status
 
 This file is the Phase 3 status page. The older "how to add
-`ConvertMemoryToSPM`" checklist is now superseded by `todo.md`,
-`spm-lowering.md`, `3tier.md`, and
+`ConvertMemoryToSPM`" checklist is now superseded by `phase3-compiler-backlog.md`,
+`../archive/matmul-spm-lowering-closure.md`, `three-tier-placement.md`, and
 `../evidence/l2_warming.md`.
 
 ## What Phase 3 Covers
@@ -30,6 +30,12 @@ automatically:
   `vector_add`, and `layer_norm` pass functionally in both SPM and cache
   baseline modes.
 - SPM size defaults have been unified to 256 KiB across the current path.
+- Tier sidecar coverage has been audited; `matmul` is the current real SPM
+  workload, `vector_add` is intentionally not transformed, and `layer_norm`
+  needs reduction matcher work before it enters the SPM path.
+- Tier 2 L2-warming has been verified by the `dma_l2_warming`
+  microbenchmark; the 4K-32K working-set sweep confirms near-100% L2 hits
+  after DMA and about 2.8x speedup over the cold scalar-read phase.
 
 ### Current State of P3
 
@@ -63,7 +69,7 @@ landed pieces:
 Small-case fair-baseline cycle count: SPM 38,361 vs cache 37,004 (+3.7%).
 Large cold-start headline: SPM 288,976,339 vs cache 386,049,495 (-25.1%).
 DMA stats on the 64×64 smoke case remain unchanged (128 transfers, 131,072
-bytes, 4,096 SPM reads, 0 bank conflicts).  See `spm-lowering.md` §P3.0 /
+bytes, 4,096 SPM reads, 0 bank conflicts).  See `../archive/matmul-spm-lowering-closure.md` §P3.0 /
 §P3.5 for the measured tables and interpretation.
 
 Stage 2.6 also produced steady-state warm-cache data.  Those runs are not
@@ -73,7 +79,7 @@ not as the headline criterion.
 
 ## Three-Tier Placement Status
 
-`3tier.md` describes the intended placement framework:
+`three-tier-placement.md` describes the intended placement framework:
 
 - Tier 1: SPM-resident tensor, future work.
 - Tier 2: cacheable DRAM plus DMA tiling, needed for the L2-warming claim.
@@ -85,17 +91,20 @@ The MVP framework is landed. Coverage audit (2026-04-29, `make verify`) confirme
 - `vector_add`: empty tier JSON. Expected — single-block kernel with no loop, no tile reuse. SPM tiling has no benefit here.
 - `layer_norm`: empty tier JSON. Root cause: pointer arithmetic loads + reduction matcher only accepts 1 non-dot load, but layer_norm pass 3 has 3 loads (x, gamma, beta). Needs kernel rewrite to block pointers + reduction matcher generalization.
 
-See `3tier.md` §4.1 for full analysis.
+See `three-tier-placement.md` §4.1 for full analysis.
 
 ## Near-Term Priority Order
 
-1. ~~Resolve the Tier sidecar coverage mismatch.~~ Done (2026-04-29). See `3tier.md` §4.1.
-2. Implement `../evidence/l2_warming.md`'s `dma_l2_warming` microbenchmark
-   with cacheable DMA, UC DMA, no-DMA scalar baseline, per-checkpoint stats,
-   and a working-set sweep.
+1. ~~Resolve the Tier sidecar coverage mismatch.~~ Done (2026-04-29). See `three-tier-placement.md` §4.1.
+2. ~~Implement `../evidence/l2_warming.md`'s `dma_l2_warming` microbenchmark.~~
+   Done (2026-04-30): cacheable DMA, UC DMA, no-DMA scalar baseline,
+   per-checkpoint stats, and 4K-32K working-set sweep are recorded in
+   `../evidence/l2_warming.md`.
 3. ~~Add Phase 6 tooling: `verify-spm-fires`, unified run/compare targets,
    and a stats CSV parser.~~ Done: `make verify` landed; `make run-<kernel>` / `make cmp-<kernel>` cover unified run/compare targets; `compare_stats.py` extracts metrics to `.txt` and CSV (`--csv` / `--spm-only-csv`). Remaining: Phase 6 comparison tooling.
-4. After placement coverage stabilizes, clean up compiler robustness:
+4. Upgrade reduction lowering from single-buffer prefetch to true
+   double-buffer pipelining after the 2-D address fix.
+5. Clean up compiler robustness:
    derive GEMM A/B identity and K dimension from `vector.contract` indexing
    maps, generalize reduction matching to multiple loads sharing the loop IV,
    and add `DmaOpsToLLVM` options for MMIO base and future `useXspmInsn`.
@@ -113,7 +122,7 @@ specific experiment intentionally overrides the environment.
 ## What Is Not Phase 3 Critical Path
 
 - Tier 1 resident SPM needs func arg addrspace(3), harness pre-launch DMA,
-  and an SPM layout manifest. Keep it in `3tier.md` §6.1 until Tier 2
+  and an SPM layout manifest. Keep it in `three-tier-placement.md` §6.1 until Tier 2
   evidence is stable.
 - `has_scalar_reuse` should only be expanded when a new workload needs it.
   Candidate extensions include scalar from `vector.extract`, loop-external
@@ -123,8 +132,8 @@ specific experiment intentionally overrides the environment.
 
 ## Source Of Truth
 
-- `spm-lowering.md`: current `matmul` SPM lowering and P3 DMA-latency work.
-- `3tier.md`: three-tier placement design and backlog.
-- `../evidence/l2_warming.md`: Tier 2 L2-warming verification plan.
-- `todo.md`: broader Phase 3 audit and remaining compiler robustness tasks.
-- `next_steps.md`: current execution order and task list.
+- `../archive/matmul-spm-lowering-closure.md`: archived matmul SPM lowering closure and P3 measurements.
+- `three-tier-placement.md`: three-tier placement design and backlog.
+- `../evidence/l2_warming.md`: Tier 2 L2-warming verification results.
+- `phase3-compiler-backlog.md`: broader Phase 3 audit and remaining compiler robustness tasks.
+- `phase3-execution-timeline.md`: current execution order and task list.

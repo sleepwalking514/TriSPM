@@ -1,4 +1,14 @@
-# SPM Matmul Lowering Optimization TODO
+# Matmul SPM Lowering Closure — Phase 3 Result
+
+> **Status: ARCHIVED RESULT — 2026-04-30**
+> This file records the completed Phase 3 matmul SPM lowering work:
+> codegen-shape recovery, fair cold-cache measurement, MMIO descriptor
+> compaction, size/steady sweeps, and the final cold-start headline.
+> Current Phase 3 status now lives in
+> [`../plans/phase3.md`](../plans/phase3.md), and future ordering lives in
+> [`../plans/phase3-execution-timeline.md`](../plans/phase3-execution-timeline.md).
+>
+> Keep this as the measured result log. It is no longer the active task list.
 
 DmaWait 自旋轮询块（volatile load BB）被 LLVM 调度在 SPM 加载块和 FMA 块之间。RISC-V backend 的 load+shufflevector(splat) → vfmacc.vf 折叠不跨基本块。
 
@@ -113,7 +123,7 @@ backend's `load + shufflevector(splat) → vfmacc.vf` folding does not
 cross basic block boundaries, so the backend was forced to materialize
 full `<16 x f32>` loads then `vrgather.vi` lanes.
 
-Fix (in [`ConvertMemoryToSPM.cpp`](compiler/third_party/cpu/lib/TritonCPUTransforms/ConvertMemoryToSPM.cpp)
+Fix (in [`ConvertMemoryToSPM.cpp`](../../compiler/third_party/cpu/lib/TritonCPUTransforms/ConvertMemoryToSPM.cpp)
 `transformGemmLoop`): emit `DmaWaitOp` at the **start** of the body
 instead of the end. Semantics also become more correct — we wait for the
 prefetch that filled CURRENT (issued in the prior iteration / prologue)

@@ -1,5 +1,11 @@
 # SplitLargeContract Pass — 寄存器微分块
 
+> **Status: ARCHIVED RESULT — 2026-04-30**
+> SplitLargeContract has landed and been validated for the Phase 3 large-tile
+> matmul path. Keep this file as the design and measurement record.
+> Follow-on DMA reuse work is tracked in
+> [`../plans/spm-dma-reuse.md`](../plans/spm-dma-reuse.md).
+
 ## 问题
 
 256×256×256 matmul（32×32 tile, T3-GSM1）的 ROI 统计显示：

@@ -134,7 +134,7 @@ that the uncacheable path truly bypasses L2.
 
 ---
 
-## C. TODOs (completed)
+## C. Completed Tasks
 
 - [x] **T1** — Create `workloads/kernels/dma_l2_warming/` harness
 - [x] **T2** — m5ops wired up via inline asm in `libspm.h`

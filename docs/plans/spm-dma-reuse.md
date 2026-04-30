@@ -140,7 +140,7 @@ descriptor 会触发 queue full，并且当前实现会 drop descriptor。因此
 ### Step 1：文档和防误导
 
 - 更新本文件，废弃旧方案 1
-- 在 `docs/plans/split-large-contract.md` 中修正“B 不重复搬运”的历史描述
+- 在 [`../archive/split-large-contract.md`](../archive/split-large-contract.md) 中修正“B 不重复搬运”的历史描述
 
 ### Step 2：实现新的 GEMM lowering
 

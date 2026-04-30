@@ -1,4 +1,4 @@
-# Phase 3 — Status & Outstanding Work
+# Phase 3 Compiler Backlog
 
 > Audit performed against `~/.claude/plans/moonlit-napping-origami.md` ("Phase 3 — SPM Transformation Pass") and the existing repo state.
 
@@ -31,30 +31,35 @@ These are the only Phase-3 deliverables that should be considered "done".
 
 ---
 
-## B. Outstanding work — Phase 3 deliverables not yet implemented
+## B. Audit Findings And Remaining Work
+
+This section preserves the original audit findings, but the final status is
+tracked in §E. Several items that were blockers in the first audit are now
+resolved; only the explicitly open P1 / deferred items remain active backlog.
 
 ### 3a. GEMM double-buffering — **mostly resolved** (P0 #1, #3, #5; writeback deferred to Phase 4b)
 
-1. **No real compute/DMA overlap.**
-   The loop body emits compute first and **then** the prefetch + `dma_wait` (`ConvertMemoryToSPM.cpp:414-517`). The DMA engine therefore starts **after** compute finishes, so the `dma_wait` immediately blocks. To realise actual double-buffering, reorder to:
-   `prefetch_next → read_current → compute → dma_wait`.
+1. ~~**No real compute/DMA overlap.**~~ Resolved by P0 #3. The GEMM path now
+   prefetches before `read_current` / compute and waits at the end of the
+   iteration; measured overlap is recorded in
+   `../archive/matmul-spm-lowering-closure.md`.
 2. **No SPM writeback for output tile.** Phase 3 plan keeps writeback in §4b, but the GEMM pass should at least leave a hook (or stop transforming when the output is also SPM-resident). Today the C tile still goes through cacheable `vector.transfer_write`.
-3. **MVP gating leaves all three current workloads untransformed** — see §D for evidence. We need a kernel that actually triggers the pass before any benchmark can be run.
+3. ~~**MVP gating leaves all current workloads untransformed.**~~ Resolved for
+   `matmul`; `vector_add` is intentionally not transformed, and `layer_norm`
+   remains blocked on reduction matcher generalization.
 
 ### 3b. Reduction prefetch — **partially resolved** (P0 #2 race fix done; matcher generalization remains P1 #11)
 
-1. **Single-buffer race (correctness bug).**
-   `transformReductionLoop` issues `dma_enqueue_2d(addrBuf, …)` **before** the SPM read of the current chunk (`ConvertMemoryToSPM.cpp:637-650`). Since both target the same buffer, the DMA write of iteration N+1 can land in SPM before the iteration-N read completes — the read may observe partially or fully overwritten data.
-   Fix options:
-     - Reorder: read current → reduce → prefetch → `dma_wait` (still single buffer, still safe).
-     - Or move to a 2-buffer ping-pong analogous to GEMM.
+1. ~~**Single-buffer race (correctness bug).**~~ Resolved by reordering:
+   read current → reduce → prefetch → `dma_wait`. The remaining performance
+   task is to move from safe single-buffer behavior to true double buffering.
 2. **Pattern is too narrow** (`nonDotLoads.size() == 1`). LayerNorm's normalisation pass loads `x`, `gamma`, `beta` in the same loop; the matcher rejects it. Generalise to "all loads share the same induction variable as their leading index, and total tile bytes ≤ SPM".
 
-### 3c. Three-tier data-placement policy — **MVP landed** (see `3tier.md` M1-M8; coverage audited 2026-04-29)
+### 3c. Three-tier data-placement policy — **MVP landed** (see `three-tier-placement.md` M1-M8; coverage audited 2026-04-29)
 
-> ✅ Tier 2/3 MVP plumbing implemented via `3tier.md` M1-M8: `SPMSpaceManager`、`SPMTensorPlacement` pass、JSON sidecar、launcher `_alloc/_free_all`、harness 改造。覆盖审计完成：`matmul` 正常命中 Tier 3；`vector_add` 空 JSON 是设计预期（无循环）；`layer_norm` 需 kernel 改写 + matcher 泛化。详见 `3tier.md` §4.1。
+> ✅ Tier 2/3 MVP plumbing implemented via `three-tier-placement.md` M1-M8: `SPMSpaceManager`、`SPMTensorPlacement` pass、JSON sidecar、launcher `_alloc/_free_all`、harness 改造。覆盖审计完成：`matmul` 正常命中 Tier 3；`vector_add` 空 JSON 是设计预期（无循环）；`layer_norm` 需 kernel 改写 + matcher 泛化。详见 `three-tier-placement.md` §4.1。
 
-The table below reflects the state after the 2026-04-29 audit; see `3tier.md` for full details.
+The table below reflects the state after the 2026-04-29 audit; see `three-tier-placement.md` for full details.
 
 | Required piece | Status |
 |---|---|
@@ -62,7 +67,7 @@ The table below reflects the state after the 2026-04-29 audit; see `3tier.md` fo
 | Tier classification per tensor (size vs SPM, scalar reuse) | ✅ implemented (matmul args → Tier 3) |
 | Compiler-driven choice of cacheable vs uncacheable allocation | ✅ implemented via `_alloc` dispatch |
 | Harness API to allocate in cacheable / uncacheable / SPM regions | ✅ all 3 harnesses use `<kernel>_alloc` |
-| L2-warming experimental verification (Tier 2) | pending — see `../evidence/l2_warming.md` |
+| L2-warming experimental verification (Tier 2) | ✅ completed — see `../evidence/l2_warming.md` |
 | `verify-spm-fires` tooling | ✅ `make verify` / `make verify-<kernel>` |
 
 ### 3d. Loop boundary handling — **RESOLVED** (P0 #6)
@@ -89,7 +94,8 @@ Fix: add a compile-time assert (or emit a runtime guard that skips the SPM path)
   *Fix:* derive the K-dimension from the `vector.contract`'s indexing maps, and match each load to A/B via the contract's lhs/rhs operands instead of by walk order.
 - **Cloned-read rediscovery via `getLoc()` is fragile** (`:401-408`). Two `transfer_read`s sharing a debug location (common after CSE/canonicalize) would collide. Replace with a direct `mapping.lookup(readA.getResult())` on the cloned ops, or do the substitution at clone time.
 - **`dotLoads.size() != 2` rejects valid GEMMs**: a single-load `gemv`, a 3-input fused matmul, or anything else with extra loads inside the K-loop is silently passed through.
-- **Non-overlapping prefetch (§B.3a above)** — also a quality issue here, not just missing functionality.
+- ~~**Non-overlapping prefetch (§B.3a above)**~~ — resolved for GEMM; keep
+  watching this shape if `transformGemmLoop` is refactored.
 - **Unused `TiledLoadInfo::feedsDot` for non-dot loads** is fine, but the early `return false` cases in `transformGemmLoop` leave the IR partially mutated — verify that the prologue DMAs are not emitted before the bail-out (currently they are; `:328-332` runs before the failure path on lines `:411`/`:325`).
 
 ### 2. `SplitLargeContract` (new pass)
@@ -103,8 +109,13 @@ Fix: add a compile-time assert (or emit a runtime guard that skips the SPM path)
 
 ### 3. `transformReductionLoop`
 
-- **Correctness bug** (race) documented in §B.3b.1.
-- The prefetch DRAM offset uses `leadingStride * elemBytes * (nextIv - lb)` (`:626-635`). For a 1-D contiguous load this is fine, but for a 2-D reduction with a non-contiguous leading dimension this silently produces wrong addresses.
+- ~~**Correctness bug** (race) documented in §B.3b.1.~~ Resolved by
+  reordering the single-buffer prefetch after the current read.
+- ~~**2-D non-leading-IV prefetch offset bug.**~~ Resolved on 2026-04-30 by
+  using the stride of the dimension indexed by the IV instead of always
+  using `strides[0]`; covered by `@reduction_2d_non_leading_iv`.
+- **Remaining performance issue:** the path is still single-buffered, so DMA
+  latency is serially exposed. See `phase3-execution-timeline.md` Stage 4.5.
 
 ### 4. `DmaOpsToLLVM.cpp` (Phase 2 lowering, used by Phase 3)
 
@@ -123,12 +134,14 @@ Plan §3 specifies a precise buffer address layout:
 | spm_b0 | `SPM_BASE + 2×tile_a` |
 | spm_b1 | `SPM_BASE + 2×tile_a + tile_b` |
 
-**Not yet verified** whether the address arithmetic in `transformGemmLoop` (`:328-340`, buffer offset calculations) matches this layout. If offsets diverge — e.g. `spm_b0` starts at `SPM_BASE + tile_a` instead of `SPM_BASE + 2×tile_a` — the double buffers for A and B will overlap and corrupt each other.
+Verified in P0 #7: A_front=0x0, A_back=+0x400, B_front=+0x800,
+B_back=+0xC00 for the 64x64 / 16x16 matmul smoke case.
 
 ### 6. End-to-end pipeline integration
 
 - `compiler.py:216-221` inserts the SPM pass and `:303` lowers the DMA ops. Both gated on `_AOT_MODE`. Good.
-- **But the pass is silently no-op on every workload we ship today** — see §D.
+- `matmul` now exercises the pass in production. `vector_add` remains a
+  designed no-op, and `layer_norm` needs the reduction matcher work in §E.
 
 ### 7. Tests
 
@@ -158,7 +171,7 @@ Either way, **until this is fixed nothing in Phase 3 is actually exercised in pr
 
 ---
 
-## E. Concrete TODOs (in priority order)
+## E. Concrete Backlog Items
 
 ### P0 — blocks any benchmark / paper number
 
@@ -184,12 +197,12 @@ Either way, **until this is fixed nothing in Phase 3 is actually exercised in pr
 ### P0+ — start immediately after P0 completes (Phase 3 core claim)
 
 8. ~~**Design Tier classification framework (§3c).**~~
-   ✅ Done. `SPMTensorPlacement` pass implements `has_scalar_reuse` analysis, tier decision table, JSON sidecar export, and launcher `_alloc/_free_all` generation. See `3tier.md` M1-M8.
+   ✅ Done. `SPMTensorPlacement` pass implements `has_scalar_reuse` analysis, tier decision table, JSON sidecar export, and launcher `_alloc/_free_all` generation. See `three-tier-placement.md` M1-M8.
 
 ### P1 — Phase 3 spec compliance
 
 9. ~~**Implement Tier classification (§3c).**~~
-   ✅ Done. `SPMTensorPlacement` pass tags each tensor arg with tier 1/2/3. Launcher dispatches to `spm_malloc`/`malloc`/`dma_buf_malloc`. Coverage audit (2026-04-29): matmul → Tier 3; vector_add/layer_norm → no eligible tensors. See `3tier.md` §4.1.
+   ✅ Done. `SPMTensorPlacement` pass tags each tensor arg with tier 1/2/3. Launcher dispatches to `spm_malloc`/`malloc`/`dma_buf_malloc`. Coverage audit (2026-04-29): matmul → Tier 3; vector_add/layer_norm → no eligible tensors. See `three-tier-placement.md` §4.1.
 10. **Robust GEMM matcher.**
     - Derive A/B identity and the K dimension from `vector.contract`'s indexing maps.
     - Replace `getLoc()`-based cloned-read lookup with `IRMapping`-based lookup.

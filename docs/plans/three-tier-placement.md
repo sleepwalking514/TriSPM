@@ -1,6 +1,6 @@
 # Three-Tier Data Placement — Plan & Discussion (P0+ #8)
 
-> 对应 `todo.md` §B.3c / §E P0+ #8 / §E P1 #9。
+> 对应 `phase3-compiler-backlog.md` §B.3c / §E P0+ #8 / §E P1 #9。
 > Phase 3 论文核心论点 "SPM never worse than cache" 的实现支撑。
 
 ---
@@ -161,7 +161,7 @@
 **根因分析**：
 
 - **vector_add**：kernel 使用 pointer arithmetic（`x_ptr + offs`），无 `tl.make_block_ptr`。`ConvertMemoryOps` 将其降为 gather-style load，不产生 `vector.transfer_read %memref[%idx]` 的规范形式。此外 vector_add 是单 block 无循环 kernel，没有 `scf.for` 可供 `findTiledLoads` 匹配。**这是设计上的预期行为**——elementwise kernel 无 tile reuse，SPM tiling 无收益。
-- **layer_norm**：同样使用 pointer arithmetic（`x_ptr + row * N + offs`），load 不产生规范形式。即使改为 block pointer，reduction matcher 也只接受 `nonDotLoads.size() == 1`，而 layer_norm pass 3 有 3 个 load（x, gamma, beta）。**需要 reduction matcher 泛化**（`todo.md` §C / `next_steps.md` `compiler-robustness-backlog`）才能覆盖。
+- **layer_norm**：同样使用 pointer arithmetic（`x_ptr + row * N + offs`），load 不产生规范形式。即使改为 block pointer，reduction matcher 也只接受 `nonDotLoads.size() == 1`，而 layer_norm pass 3 有 3 个 load（x, gamma, beta）。**需要 reduction matcher 泛化**（`phase3-compiler-backlog.md` §C / `phase3-execution-timeline.md` `compiler-robustness-backlog`）才能覆盖。
 
 **结论**：
 
@@ -199,5 +199,5 @@
 - 触发条件：当未来引入需要更宽语义的 workload 时再加，避免过早泛化。
 
 ### 6.3 验证补完
-- `make verify-spm-fires` 引入 tier 检查（todo.md §E P2 #14 的延伸）。
-- L2-warming 实验数据点：tier 2 vs cache baseline，要求新写 long-vector + scalar-tail workload。
+- `make verify-spm-fires` 引入 tier 检查（phase3-compiler-backlog.md §E P2 #14 的延伸）— 已由 `make verify` / `make verify-<kernel>` 覆盖。
+- L2-warming 实验数据点：tier 2 vs cache baseline，要求新写 long-vector + scalar-tail workload — 已由 `../evidence/l2_warming.md` 的 `dma_l2_warming` microbenchmark 覆盖。

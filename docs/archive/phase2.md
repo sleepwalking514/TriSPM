@@ -1,7 +1,7 @@
 > **Status: SUPERSEDED — 2026-04-27**
 > 原 Phase 2 收尾笔记，记录三处对齐项与"是否 cacheable"的最初想法。
-> - MMIO base pass option / `useXspmInsn` 开关 / `addIllegalOp<DmaEnqueue2DOp, DmaWaitOp>()` → 已迁移到 [`../plans/todo.md`](../plans/todo.md) §Phase-3 plumbing；其中 `addIllegalOp` 已落地，另两项仍为 backlog。
-> - "让编译器决定数据放 cacheable 还是 uncacheable" → 演化为 [`../plans/3tier.md`](../plans/3tier.md) 的三层 placement 设计。
+> - MMIO base pass option / `useXspmInsn` 开关 / `addIllegalOp<DmaEnqueue2DOp, DmaWaitOp>()` → 已迁移到 [`../plans/phase3-compiler-backlog.md`](../plans/phase3-compiler-backlog.md) §Phase-3 plumbing；其中 `addIllegalOp` 已落地，另两项仍为 backlog。
+> - "让编译器决定数据放 cacheable 还是 uncacheable" → 演化为 [`../plans/three-tier-placement.md`](../plans/three-tier-placement.md) 的三层 placement 设计。
 >
 > 保留作为决策起点的快照，不再是行动文档。
 

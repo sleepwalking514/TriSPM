@@ -502,7 +502,7 @@ Run the same kernels on gem5 in cache-only mode (no SPM hardware, no ConvertMemo
 |--------|-------------|
 | Cache-only | Pure cache hierarchy, no SPM hardware |
 | SPM (Tier 3) | Uncacheable DMA buffer, current implementation |
-| SPM (Tier 2) | Cacheable + DMA tiling (after Tier 2 implementation) |
+| SPM (Tier 2) | Cacheable + DMA tiling; placement plumbing exists and L2-warming is verified, but broad workload integration remains future work |
 
 **Expected speedup vs. target venue:**
 
@@ -512,24 +512,24 @@ Run the same kernels on gem5 in cache-only mode (no SPM hardware, no ConvertMemo
 | 1.3x – 1.8x | A-tier | CGO / PACT / ICS |
 | 2x+ | Top-tier possible | ASPLOS / MICRO |
 
-### 6b. Tier 2 Placement Policy Implementation [P0]
+### 6b. Tier 2 Placement Policy And Evidence [P0]
 
-The three-tier placement policy is the paper's most valuable insight, but Tier 2 (cacheable + DMA tiling) is not yet implemented.
+The three-tier placement policy is the paper's most valuable insight. The Tier 2/3 MVP plumbing has landed, and the L2-warming side effect is verified in `../evidence/l2_warming.md`; the remaining work is to connect Tier 2 to broader scalar-reuse workloads and compare it against cache baselines.
 
-- Implement Tier 2 path in ConvertMemoryToSPM: tensors with scalar reuse that exceed SPM capacity go to cacheable DRAM
-- Experimentally verify L2-warming effect: after DMA reads from cacheable DRAM, L2 holds data copies
-- Compare Tier 2 vs pure cache: prove "cacheable + DMA tiling" is never worse than cache (performance floor guarantee)
+- Extend Tier 2 workload coverage: tensors with scalar reuse that exceed SPM capacity should go to cacheable DRAM.
+- Use the completed L2-warming evidence as the mechanism proof: after DMA reads from cacheable DRAM, L2 holds data copies.
+- Compare Tier 2 vs pure cache on real kernels: prove "cacheable + DMA tiling" is never worse than cache (performance floor guarantee).
 
 **This is the only experimental evidence for the core claim "SPM never worse than cache."**
 
 ### 6c. Expand Workload Coverage [P1]
 
-Currently only matmul and layer_norm have meaningful SPM support (vector_add is too trivial). Need at least 5 representative kernels:
+Currently only `matmul` meaningfully enters the SPM lowering path. `vector_add` is intentionally too trivial, and `layer_norm` still needs block-pointer form plus generalized reduction matching. Need at least 5 representative kernels:
 
 | Kernel | Type | SPM Pattern | Priority |
 |--------|------|-------------|----------|
 | matmul | GEMM | double-buffer ✅ | Done |
-| layer_norm | reduction | single-buffer ✅ | Done |
+| layer_norm | reduction | single-buffer once matcher fires | P1 — needs block pointers + generalized reduction matcher |
 | softmax | reduction | single-buffer | P1 — reuse reduction pattern |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | single-buffer | P2 — diversify workload mix |
@@ -570,7 +570,7 @@ Phase 1 (AOT cross-compile) ✅ COMPLETE
               │     └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
                     ├─ 6a Cache baseline [ready once Phase 3 is done]
-                    ├─ 6b Tier 2 implementation [Phase 3 + compiler changes]
+                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence done]
                     ├─ 6c Additional workloads [after Phase 3/4 pattern support]
                     ├─ 6d Breakdown analysis [built on 6a data]
                     ├─ 6e Area comparison [independent, can start anytime]
