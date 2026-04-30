@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TriSPM Architecture Diagram</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #fff; display: flex; justify-content: center; padding: 30px; font-family: 'Times New Roman', serif; }
+</style>
+</head>
+<body>
+<svg width="1100" height="920" viewBox="0 0 1100 920" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <marker id="ab"  viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#2266bb"/></marker>
+  <marker id="abr" viewBox="0 0 10 7" refX="1" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="10 0,0 3.5,10 7" fill="#2266bb"/></marker>
+  <marker id="ag"  viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#22884a"/></marker>
+  <marker id="agr" viewBox="0 0 10 7" refX="1" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="10 0,0 3.5,10 7" fill="#22884a"/></marker>
+  <marker id="ao"  viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#dd7722"/></marker>
+  <marker id="aor" viewBox="0 0 10 7" refX="1" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="10 0,0 3.5,10 7" fill="#dd7722"/></marker>
+  <marker id="ap"  viewBox="0 0 10 7" refX="9" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#8844aa"/></marker>
+  <marker id="apr" viewBox="0 0 10 7" refX="1" refY="3.5" markerWidth="7" markerHeight="5" orient="auto"><polygon points="10 0,0 3.5,10 7" fill="#8844aa"/></marker>
+</defs>
+
+<!-- ============================================================ -->
+<!-- O3CPU Complex -->
+<!-- ============================================================ -->
+<rect x="170" y="20" width="450" height="105" rx="8" ry="8"
+      stroke="#555" stroke-width="1.5" stroke-dasharray="8,4" fill="none"/>
+<text x="185" y="37" font-family="Times New Roman" font-size="13" fill="#555" font-style="italic">O3CPU Complex</text>
+
+<rect x="400" y="48" width="170" height="52" rx="6" ry="6" stroke="#333" stroke-width="1.5" fill="#d4e8f0"/>
+<text x="485" y="79" font-family="Times New Roman" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">O3CPU Core</text>
+
+<rect x="205" y="48" width="155" height="52" rx="6" ry="6" stroke="#333" stroke-width="1.5" fill="#d4e8f0"/>
+<text x="282" y="79" font-family="Times New Roman" font-size="13" fill="#222" text-anchor="middle">ITB / DTB Walkers</text>
+
+<!-- ============================================================ -->
+<!-- L1 Row  (y=175) -->
+<!-- ============================================================ -->
+<rect x="25"  y="170" width="115" height="55" rx="6" ry="6" stroke="#333" stroke-width="1.5" fill="#b8dde8"/>
+<text x="82"  y="191" font-family="Times New Roman" font-size="13" fill="#222" text-anchor="middle">dptw_cache</text>
+<text x="82"  y="210" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">(8 KiB)</text>
+
+<rect x="170" y="170" width="115" height="55" rx="6" ry="6" stroke="#333" stroke-width="1.5" fill="#b8dde8"/>
+<text x="227" y="191" font-family="Times New Roman" font-size="13" fill="#222" text-anchor="middle">iptw_cache</text>
+<text x="227" y="210" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">(8 KiB)</text>
+
+<rect x="315" y="170" width="125" height="55" rx="6" ry="6" stroke="#333" stroke-width="1.5" fill="#b8dde8"/>
+<text x="377" y="191" font-family="Times New Roman" font-size="13" fill="#222" text-anchor="middle">L1D Cache</text>
+<text x="377" y="210" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">(32 KiB)</text>
+
+<rect x="472" y="155" width="135" height="70" rx="6" ry="6" stroke="#333" stroke-width="1.5" fill="#a8e0b8"/>
+<text x="539" y="185" font-family="Times New Roman" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">Scratchpad</text>
+<text x="539" y="205" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">(256 KiB)</text>
+
+<rect x="640" y="170" width="125" height="55" rx="6" ry="6" stroke="#333" stroke-width="1.5" fill="#b8dde8"/>
+<text x="702" y="191" font-family="Times New Roman" font-size="13" fill="#222" text-anchor="middle">L1I Cache</text>
+<text x="702" y="210" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">(32 KiB)</text>
+
+<!-- ============================================================ -->
+<!-- CPU → L1/SPM connections -->
+<!-- ============================================================ -->
+<!-- Walker → dptw (blue) -->
+<line x1="237" y1="100" x2="95" y2="170" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<!-- Walker → iptw (blue) -->
+<line x1="260" y1="100" x2="237" y2="170" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<!-- CPU → L1D (blue left, orange right — all data goes through dcache_port) -->
+<line x1="437" y1="100" x2="374" y2="170" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<line x1="443" y1="100" x2="380" y2="170" stroke="#dd7722" stroke-width="2" marker-end="url(#ao)" marker-start="url(#aor)"/>
+<!-- CPU → SPM (green) -->
+<line x1="505" y1="100" x2="525" y2="155" stroke="#22884a" stroke-width="2.5" marker-end="url(#ag)" marker-start="url(#agr)"/>
+<!-- CPU → L1I (blue) -->
+<line x1="560" y1="100" x2="702" y2="170" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+
+<!-- ============================================================ -->
+<!-- L2XBar  (y=290) -->
+<!-- ============================================================ -->
+<rect x="25" y="285" width="850" height="35" rx="4" ry="4" fill="#dde88a" stroke="#999" stroke-width="1.2"/>
+<text x="450" y="307" font-family="Times New Roman" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">L2XBar (l2bus)</text>
+<text x="890" y="291" font-family="Times New Roman" font-size="10" fill="#888" text-anchor="start">cpu_side ↑</text>
+<text x="890" y="315" font-family="Times New Roman" font-size="10" fill="#888" text-anchor="start">mem_side ↓</text>
+
+<!-- L1 → L2XBar (all blue, cpu_side) -->
+<line x1="82"  y1="225" x2="82"  y2="285" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<line x1="227" y1="225" x2="227" y2="285" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<!-- L1D → L2XBar  blue left, orange right (L1D pass-through for uncacheable) -->
+<line x1="374" y1="225" x2="374" y2="285" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<line x1="380" y1="225" x2="380" y2="285" stroke="#dd7722" stroke-width="2" marker-end="url(#ao)" marker-start="url(#aor)"/>
+<!-- L1I → L2XBar -->
+<line x1="702" y1="225" x2="702" y2="285" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+
+<!-- SPM bus port → L2XBar (purple, mem_side — SPM is responder for DMA) -->
+<line x1="539" y1="225" x2="539" y2="285" stroke="#8844aa" stroke-width="2" marker-end="url(#ap)" marker-start="url(#apr)"/>
+<text x="550" y="258" font-family="Times New Roman" font-size="10" fill="#8844aa" text-anchor="start">spm.port (mem_side)</text>
+
+<!-- ============================================================ -->
+<!-- Below L2XBar: mem_side devices -->
+<!-- ============================================================ -->
+
+<!-- L2 Cache -->
+<rect x="55" y="385" width="145" height="55" rx="6" ry="6" stroke="#333" stroke-width="1.5" fill="#b8dde8"/>
+<text x="127" y="407" font-family="Times New Roman" font-size="13" fill="#222" text-anchor="middle">L2 Cache</text>
+<text x="127" y="425" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">(512 KiB)</text>
+
+<!-- L2XBar → L2Cache (blue left, purple right — DMA also reaches L2 for cacheable addresses) -->
+<line x1="124" y1="320" x2="124" y2="385" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<line x1="130" y1="320" x2="130" y2="385" stroke="#8844aa" stroke-width="2" marker-end="url(#ap)" marker-start="url(#apr)"/>
+
+<!-- DMA Engine -->
+<rect x="310" y="375" width="210" height="80" rx="6" ry="6" stroke="#c66" stroke-width="1.5" fill="#f5d0d0"/>
+<text x="415" y="395" font-family="Times New Roman" font-size="14" font-weight="bold" fill="#993333" text-anchor="middle">SpmDmaEngine</text>
+<rect x="322" y="410" width="80" height="30" rx="4" ry="4" stroke="#c96" stroke-width="1" fill="#fce0c0"/>
+<text x="362" y="429" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">PIO (slave)</text>
+<rect x="418" y="410" width="90" height="30" rx="4" ry="4" stroke="#96c" stroke-width="1" fill="#e0c0fc"/>
+<text x="463" y="429" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">DMA (master)</text>
+
+<!-- L2XBar → DMA PIO (orange, mem_side — CPU configures DMA via this) -->
+<line x1="362" y1="320" x2="362" y2="375" stroke="#dd7722" stroke-width="2" marker-end="url(#ao)" marker-start="url(#aor)"/>
+<text x="340" y="350" font-family="Times New Roman" font-size="10" fill="#dd7722" text-anchor="end">pio (mem_side)</text>
+
+<!-- DMA master → L2XBar (purple, cpu_side — DMA issues reads/writes) -->
+<line x1="463" y1="375" x2="463" y2="320" stroke="#8844aa" stroke-width="2" marker-end="url(#ap)" marker-start="url(#apr)"/>
+<text x="478" y="350" font-family="Times New Roman" font-size="10" fill="#8844aa" text-anchor="start">dma (cpu_side)</text>
+
+<!-- Uncacheable Bridge -->
+<rect x="610" y="385" width="175" height="55" rx="6" ry="6" stroke="#c96" stroke-width="1.5" fill="#fce8c0"/>
+<text x="697" y="407" font-family="Times New Roman" font-size="13" fill="#222" text-anchor="middle">Uncacheable Bridge</text>
+<text x="697" y="425" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">(uc_bridge)</text>
+
+<!-- L2XBar → uc_bridge: orange left, purple right -->
+<line x1="694" y1="320" x2="694" y2="385" stroke="#dd7722" stroke-width="2" marker-end="url(#ao)" marker-start="url(#aor)"/>
+<line x1="700" y1="320" x2="700" y2="385" stroke="#8844aa" stroke-width="2" marker-end="url(#ap)" marker-start="url(#apr)"/>
+
+<!-- ============================================================ -->
+<!-- System MemBus  (y=520) -->
+<!-- ============================================================ -->
+<rect x="55" y="515" width="740" height="35" rx="4" ry="4" fill="#dde88a" stroke="#999" stroke-width="1.2"/>
+<text x="425" y="537" font-family="Times New Roman" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">System MemBus (membus)</text>
+
+<!-- L2Cache → membus (blue left, purple right) -->
+<line x1="124" y1="440" x2="124" y2="515" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<line x1="130" y1="440" x2="130" y2="515" stroke="#8844aa" stroke-width="2" marker-end="url(#ap)" marker-start="url(#apr)"/>
+
+<!-- uc_bridge → membus: orange left, purple right -->
+<line x1="694" y1="440" x2="694" y2="515" stroke="#dd7722" stroke-width="2" marker-end="url(#ao)" marker-start="url(#aor)"/>
+<line x1="700" y1="440" x2="700" y2="515" stroke="#8844aa" stroke-width="2" marker-end="url(#ap)" marker-start="url(#apr)"/>
+
+<!-- ============================================================ -->
+<!-- DRAM  (y=620) -->
+<!-- ============================================================ -->
+<rect x="310" y="615" width="230" height="65" rx="6" ry="6" stroke="#8866aa" stroke-width="1.5" fill="#d8c8f0"/>
+<text x="425" y="641" font-family="Times New Roman" font-size="14" font-weight="bold" fill="#222" text-anchor="middle">DDR3_1600_8x8</text>
+<text x="425" y="661" font-family="Times New Roman" font-size="11" fill="#555" text-anchor="middle">MemCtrl (1 GiB)</text>
+
+<!-- membus → DRAM: blue / orange / purple parallel -->
+<line x1="419" y1="550" x2="419" y2="615" stroke="#2266bb" stroke-width="2" marker-end="url(#ab)" marker-start="url(#abr)"/>
+<line x1="425" y1="550" x2="425" y2="615" stroke="#dd7722" stroke-width="2" marker-end="url(#ao)" marker-start="url(#aor)"/>
+<line x1="431" y1="550" x2="431" y2="615" stroke="#8844aa" stroke-width="2" marker-end="url(#ap)" marker-start="url(#apr)"/>
+
+<!-- ============================================================ -->
+<!-- Address Map -->
+<!-- ============================================================ -->
+<rect x="620" y="610" width="270" height="110" rx="5" ry="5" fill="#f8f8f0" stroke="#bbb" stroke-width="1"/>
+<text x="635" y="632" font-family="Times New Roman" font-size="12" font-weight="bold" fill="#333">Address Map:</text>
+<text x="635" y="652" font-family="Times New Roman" font-size="11" fill="#555">0x00000000 – 0x1FFFFFFF  Cacheable (512M)</text>
+<text x="635" y="670" font-family="Times New Roman" font-size="11" fill="#555">0x20000000 – 0x3FFFFFFF  DMA Buffer (512M, UC)</text>
+<text x="635" y="688" font-family="Times New Roman" font-size="11" fill="#555">0x40000000 – 0x4003FFFF  SPM (256K, UC)</text>
+<text x="635" y="706" font-family="Times New Roman" font-size="11" fill="#555">0xF0000000 – 0xF000003F  DMA MMIO (UC)</text>
+
+<!-- ============================================================ -->
+<!-- Legend -->
+<!-- ============================================================ -->
+<rect x="30" y="760" width="550" height="140" rx="6" ry="6" fill="#fafafa" stroke="#ccc" stroke-width="1"/>
+<text x="50" y="785" font-family="Times New Roman" font-size="13" font-weight="bold" fill="#222">Path Legend (Bidirectional: Req ↔ Resp)</text>
+
+<line x1="50" y1="810" x2="90" y2="810" stroke="#2266bb" stroke-width="2.5"/>
+<text x="100" y="814" font-family="Times New Roman" font-size="12" fill="#333">1. Cacheable (CPU → L1 → L2XBar → L2 → membus → DRAM)</text>
+
+<line x1="50" y1="835" x2="90" y2="835" stroke="#22884a" stroke-width="2.5"/>
+<text x="100" y="839" font-family="Times New Roman" font-size="12" fill="#333">2. SPM Tightly-Coupled (CPU ↔ SPM, 1-cycle direct)</text>
+
+<line x1="50" y1="860" x2="90" y2="860" stroke="#dd7722" stroke-width="2.5"/>
+<text x="100" y="864" font-family="Times New Roman" font-size="12" fill="#333">3. Uncacheable (CPU → L1D(pass) → L2XBar → PIO / → uc_bridge → membus → DRAM)</text>
+
+<line x1="50" y1="885" x2="90" y2="885" stroke="#8844aa" stroke-width="2.5"/>
+<text x="100" y="889" font-family="Times New Roman" font-size="12" fill="#333">4. DMA Transfer (DMA ↔ L2XBar ↔ SPM / L2Cache / uc_bridge → DRAM)</text>
+
+</svg>
+</body>
+</html>
