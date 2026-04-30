@@ -48,11 +48,13 @@ resolved; only the explicitly open P1 / deferred items remain active backlog.
    `matmul`; `vector_add` is intentionally not transformed, and `layer_norm`
    remains blocked on reduction matcher generalization.
 
-### 3b. Reduction prefetch — **partially resolved** (P0 #2 race fix done; matcher generalization remains P1 #11)
+### 3b. Reduction prefetch — **partially resolved** (P0 #2 race fix done; single-load double buffering done; matcher generalization remains P1 #11)
 
 1. ~~**Single-buffer race (correctness bug).**~~ Resolved by reordering:
-   read current → reduce → prefetch → `dma_wait`. The remaining performance
-   task is to move from safe single-buffer behavior to true double buffering.
+   read current → reduce → prefetch → `dma_wait`. The single-load tiled
+   reduction path now uses two SPM buffers with a prologue prefetch, per-iteration
+   `dma_wait`, alternate-buffer prefetch, and flipped buffer index. Tiny
+   reductions remain MMIO/control-heavy even after overlap.
 2. **Pattern is too narrow** (`nonDotLoads.size() == 1`). LayerNorm's normalisation pass loads `x`, `gamma`, `beta` in the same loop; the matcher rejects it. Generalise to "all loads share the same induction variable as their leading index, and total tile bytes ≤ SPM".
 
 ### 3c. Three-tier data-placement policy — **MVP landed** (see `three-tier-placement.md` M1-M8; coverage audited 2026-04-29)
@@ -80,8 +82,8 @@ Fix: add a compile-time assert (or emit a runtime guard that skips the SPM path)
 
 ### Phase-3 plumbing items still missing (raised in `../archive/phase2.md`)
 
-1. `DMA_MMIO_BASE` / `DMA_REG_*` are `static constexpr` in `DmaOpsToLLVM.cpp:37-44`. Plan calls for "configurable via pass option" so that the same lowering can target a different MMIO map without recompiling.
-2. No `useXspmInsn` switch on `DmaOpsToLLVM` — Phase 4d will need it; the cleanest moment to add the option is now while the pass is still small.
+1. ~~`DMA_MMIO_BASE` / `DMA_REG_*` are `static constexpr` in `DmaOpsToLLVM.cpp:37-44`.~~ ✅ Resolved. `DmaOpsToLLVM` now exposes `dma-mmio-base`, and the AOT pipeline forwards `TRITON_DMA_MMIO_BASE`.
+2. ~~No `useXspmInsn` switch on `DmaOpsToLLVM`.~~ ✅ Resolved. The pass now exposes `use-xspm-insn` / `TRITON_USE_XSPM_INSN`; the switch currently fails explicitly until the Phase 4d instruction path exists.
 3. ~~**Default-size mismatch**~~ ✅ Resolved. All unified to 256 KiB. See §E P0 #4.
 
 ---
@@ -90,9 +92,8 @@ Fix: add a compile-time assert (or emit a runtime guard that skips the SPM path)
 
 ### 1. `transformGemmLoop` (correctness + brittleness)
 
-- **A/B identification is brittle.** `dotLoads[0]` is silently labelled "A" and `dotLoads[1]` "B" purely by walk order (`ConvertMemoryToSPM.cpp:290-293`). The address-step computation then hardcodes `kDimA = 1`, `kDimB = 0` (`:462,466`). If the original IR happens to walk the B load first — or the kernel uses a different layout (e.g. `A^T`) — both stride and step are wrong and the prefetch addresses point at random DRAM.
-  *Fix:* derive the K-dimension from the `vector.contract`'s indexing maps, and match each load to A/B via the contract's lhs/rhs operands instead of by walk order.
-- **Cloned-read rediscovery via `getLoc()` is fragile** (`:401-408`). Two `transfer_read`s sharing a debug location (common after CSE/canonicalize) would collide. Replace with a direct `mapping.lookup(readA.getResult())` on the cloned ops, or do the substitution at clone time.
+- ~~**A/B identification is brittle.**~~ Resolved for the standard GEMM fallback/fused path. The matcher now identifies A/B by asking `analyzeGemmContract()` whether the two reads are the `vector.contract` lhs/rhs, and retries with reversed read order before deciding the loop is not a supported GEMM.
+- ~~**Cloned-read rediscovery via `getLoc()` is fragile** (`:401-408`).~~ Resolved. Cloned reads are now recovered through `IRMapping::lookupOrNull(read.getResult())`, avoiding location-based collisions.
 - **`dotLoads.size() != 2` rejects valid GEMMs**: a single-load `gemv`, a 3-input fused matmul, or anything else with extra loads inside the K-loop is silently passed through.
 - ~~**Non-overlapping prefetch (§B.3a above)**~~ — resolved for GEMM; keep
   watching this shape if `transformGemmLoop` is refactored.
@@ -114,8 +115,10 @@ Fix: add a compile-time assert (or emit a runtime guard that skips the SPM path)
 - ~~**2-D non-leading-IV prefetch offset bug.**~~ Resolved on 2026-04-30 by
   using the stride of the dimension indexed by the IV instead of always
   using `strides[0]`; covered by `@reduction_2d_non_leading_iv`.
-- **Remaining performance issue:** the path is still single-buffered, so DMA
-  latency is serially exposed. See `phase3-execution-timeline.md` Stage 4.5.
+- ~~**Remaining performance issue:** the path is still single-buffered, so DMA
+  latency is serially exposed.~~ Resolved for the single-load reduction path.
+  The remaining LayerNorm/softmax work is matcher generalization for loops with
+  multiple loads.
 
 ### 4. `DmaOpsToLLVM.cpp` (Phase 2 lowering, used by Phase 3)
 
@@ -204,11 +207,11 @@ Either way, **until this is fixed nothing in Phase 3 is actually exercised in pr
 9. ~~**Implement Tier classification (§3c).**~~
    ✅ Done. `SPMTensorPlacement` pass tags each tensor arg with tier 1/2/3. Launcher dispatches to `spm_malloc`/`malloc`/`dma_buf_malloc`. Coverage audit (2026-04-29): matmul → Tier 3; vector_add/layer_norm → no eligible tensors. See `three-tier-placement.md` §4.1.
 10. **Robust GEMM matcher.**
-    - Derive A/B identity and the K dimension from `vector.contract`'s indexing maps.
-    - Replace `getLoc()`-based cloned-read lookup with `IRMapping`-based lookup.
+    - ~~Derive A/B identity from `vector.contract` lhs/rhs operands instead of transfer-read walk order.~~ ✅ Done for the standard GEMM fallback/fused path.
+    - ~~Replace `getLoc()`-based cloned-read lookup with `IRMapping`-based lookup.~~ ✅ Done.
     - Allow >2 loads in the loop as long as exactly two feed the contract.
 11. **Generalise reduction matcher** to "any number of loads sharing the loop IV", so LayerNorm's 3-load pass and softmax's typical body are accepted.
-12. **Make `DMA_MMIO_BASE` a pass option** on `DmaOpsToLLVM`, and add a `useXspmInsn` boolean (default off) so Phase 4d only needs to flip a flag. *(forward-pull from Phase 4d — cleanest to do now while the pass is small)*
+12. ~~**Make `DMA_MMIO_BASE` a pass option** on `DmaOpsToLLVM`, and add a `useXspmInsn` boolean (default off) so Phase 4d only needs to flip a flag.~~ ✅ Done. `use-xspm-insn` is present and intentionally errors until the instruction lowering is implemented.
 
 ### P1-deferred — explicitly out of Phase 3 scope
 
