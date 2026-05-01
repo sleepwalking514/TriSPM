@@ -102,7 +102,13 @@ Fix: add a compile-time assert (or emit a runtime guard that skips the SPM path)
 
 - ~~**A/B identification is brittle.**~~ Resolved for the standard GEMM fallback/fused path. The matcher now identifies A/B by asking `analyzeGemmContract()` whether the two reads are the `vector.contract` lhs/rhs, and retries with reversed read order before deciding the loop is not a supported GEMM.
 - ~~**Cloned-read rediscovery via `getLoc()` is fragile** (`:401-408`).~~ Resolved. Cloned reads are now recovered through `IRMapping::lookupOrNull(read.getResult())`, avoiding location-based collisions.
-- **`dotLoads.size() != 2` rejects valid GEMMs**: a single-load `gemv`, a 3-input fused matmul, or anything else with extra loads inside the K-loop is silently passed through.
+- ~~**Extra loads inside the GEMM K-loop were not explicitly verified.**~~
+  Resolved for the current GEMM contract matcher: `ConvertMemoryToSPM` now
+  classifies by the number of dot-feeding transfer reads, so a loop with
+  extra non-dot tiled loads still transforms when exactly two reads feed the
+  `vector.contract`. Covered by `@gemm_extra_non_dot_load`. Single-load
+  GEMV and true multi-input contractions remain outside the current GEMM
+  pattern.
 - ~~**Non-overlapping prefetch (§B.3a above)**~~ — resolved for GEMM; keep
   watching this shape if `transformGemmLoop` is refactored.
 - **Unused `TiledLoadInfo::feedsDot` for non-dot loads** is fine, but the early `return false` cases in `transformGemmLoop` leave the IR partially mutated — verify that the prologue DMAs are not emitted before the bail-out (currently they are; `:328-332` runs before the failure path on lines `:411`/`:325`).
@@ -224,7 +230,7 @@ Either way, **until this is fixed nothing in Phase 3 is actually exercised in pr
 10. **Robust GEMM matcher.**
     - ~~Derive A/B identity from `vector.contract` lhs/rhs operands instead of transfer-read walk order.~~ ✅ Done for the standard GEMM fallback/fused path.
     - ~~Replace `getLoc()`-based cloned-read lookup with `IRMapping`-based lookup.~~ ✅ Done.
-    - Allow >2 loads in the loop as long as exactly two feed the contract.
+    - ~~Allow >2 loads in the loop as long as exactly two feed the contract.~~ ✅ Verified by `@gemm_extra_non_dot_load`.
 11. **Generalise reduction matcher** to "any number of loads sharing the loop IV", so LayerNorm's 3-load pass and softmax's typical body are accepted.
 12. ~~**Make `DMA_MMIO_BASE` a pass option** on `DmaOpsToLLVM`, and add a `useXspmInsn` boolean (default off) so Phase 4d only needs to flip a flag.~~ ✅ Done. `use-xspm-insn` is present and intentionally errors until the instruction lowering is implemented.
 
