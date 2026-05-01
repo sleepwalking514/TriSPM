@@ -36,13 +36,25 @@ def layer_norm(x_ptr, gamma_ptr, beta_ptr, out_ptr,
     """Layer-normalise one row of the [M, N] input tensor."""
     row = tl.program_id(0)
 
-    # Use block pointers for the two single-load reduction passes so the
-    # SPM conversion pass sees canonical vector.transfer_read ops.
+    # Use block pointers so the SPM conversion pass sees canonical
+    # vector.transfer_read ops.
     x_mean_ptr = tl.make_block_ptr(
         base=x_ptr, shape=(M * N,), strides=(1,),
         offsets=(row * N,), block_shape=(BLOCK_N,), order=(0,))
     x_var_ptr = tl.make_block_ptr(
         base=x_ptr, shape=(M * N,), strides=(1,),
+        offsets=(row * N,), block_shape=(BLOCK_N,), order=(0,))
+    x_norm_ptr = tl.make_block_ptr(
+        base=x_ptr, shape=(M * N,), strides=(1,),
+        offsets=(row * N,), block_shape=(BLOCK_N,), order=(0,))
+    gamma_block_ptr = tl.make_block_ptr(
+        base=gamma_ptr, shape=(N,), strides=(1,),
+        offsets=(0,), block_shape=(BLOCK_N,), order=(0,))
+    beta_block_ptr = tl.make_block_ptr(
+        base=beta_ptr, shape=(N,), strides=(1,),
+        offsets=(0,), block_shape=(BLOCK_N,), order=(0,))
+    out_block_ptr = tl.make_block_ptr(
+        base=out_ptr, shape=(M * N,), strides=(1,),
         offsets=(row * N,), block_shape=(BLOCK_N,), order=(0,))
 
     # ---- Pass 1: mean ----
@@ -65,14 +77,16 @@ def layer_norm(x_ptr, gamma_ptr, beta_ptr, out_ptr,
 
     # ---- Pass 3: normalize, scale, store ----
     for off in range(0, N, BLOCK_N):
-        offs = off + tl.arange(0, BLOCK_N)
-        mask = offs < N
-        x = tl.load(x_ptr + row * N + offs, mask=mask, other=0.0).to(tl.float32)
-        g = tl.load(gamma_ptr + offs, mask=mask, other=1.0).to(tl.float32)
-        b = tl.load(beta_ptr  + offs, mask=mask, other=0.0).to(tl.float32)
+        x = tl.load(x_norm_ptr).to(tl.float32)
+        g = tl.load(gamma_block_ptr).to(tl.float32)
+        b = tl.load(beta_block_ptr).to(tl.float32)
         x_norm = (x - mean) * inv_std
         out = x_norm * g + b
-        tl.store(out_ptr + row * N + offs, out, mask=mask)
+        tl.store(out_block_ptr, out)
+        x_norm_ptr = tl.advance(x_norm_ptr, (BLOCK_N,))
+        gamma_block_ptr = tl.advance(gamma_block_ptr, (BLOCK_N,))
+        beta_block_ptr = tl.advance(beta_block_ptr, (BLOCK_N,))
+        out_block_ptr = tl.advance(out_block_ptr, (BLOCK_N,))
 
 
 # --- AOT cross-compilation ---

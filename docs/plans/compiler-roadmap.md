@@ -215,13 +215,11 @@ Current status:
   reduction body-top wait, buffer select, alternate-buffer enqueue, and
   2-D non-leading-IV address case.
 - Production coverage uses `layer_norm`: its mean and variance passes were
-  rewritten to `tl.make_block_ptr` + `tl.advance`, so they lower into the
-  single-load `transformReductionLoop` pattern. `make verify-layer_norm`
-  checks for `addrspace(3)` / `fence iorw`, and `make cmp-layer_norm`
-  verifies functional correctness on gem5.
-- The final LayerNorm normalize loop still has three loads (`x`, `gamma`,
-  `beta`) and remains pending until the reduction matcher accepts multiple
-  loads sharing the loop IV.
+  rewritten to `tl.make_block_ptr` + `tl.advance`, and its final normalize
+  loop now uses block pointers for `x`, `gamma`, `beta`, and `out`. These
+  lower into the reduction/streaming `transformReductionLoop` pattern.
+  `make verify-layer_norm` checks for `addrspace(3)` / `fence iorw`, and
+  `make cmp-layer_norm` verifies functional correctness on gem5.
 
 ### 3c. Data placement policy
 
@@ -551,8 +549,8 @@ tiling. Need at least 5 representative kernels:
 | Kernel | Type | SPM Pattern | Priority |
 |--------|------|-------------|----------|
 | matmul | GEMM | double-buffer ✅ | Done |
-| layer_norm | reduction | double-buffer ✅ for mean/variance; final normalize still multi-load | Coverage done; P1 for multi-load matcher |
-| softmax | reduction | double-buffer once matcher fires | P1 — reuse reduction pattern after multi-load generalization |
+| layer_norm | reduction | double-buffer ✅ for mean/variance/final normalize | Coverage done; tiny-shape MMIO overhead remains |
+| softmax | reduction | double-buffer once canonical block-pointer matcher fires | P1/P2 — add workload and reuse reduction pattern |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | double-buffer once matcher fires | P2 — diversify workload mix |
 

@@ -157,28 +157,26 @@
 | workload | `_tiers.json` | LLIR `addrspace(3)` | LLIR `fence iorw` | SPM pass 生效？ |
 |---|---|---|---|---|
 | matmul | `{"0":3,"1":3}` | 583 | 80 | ✅ |
-| layer_norm | `{"0":3}` | 32 | 68 | ✅ mean/variance reduction only |
+| layer_norm | `{"0":3,"1":3,"2":3}` | 38 | 78 | ✅ mean/variance + final normalize |
 | vector_add | `{}` | 0 | 0 | ❌ |
 
 **根因分析**：
 
 - **vector_add**：kernel 使用 pointer arithmetic（`x_ptr + offs`），无 `tl.make_block_ptr`。`ConvertMemoryOps` 将其降为 gather-style load，不产生 `vector.transfer_read %memref[%idx]` 的规范形式。此外 vector_add 是单 block 无循环 kernel，没有 `scf.for` 可供 `findTiledLoads` 匹配。**这是设计上的预期行为**——elementwise kernel 无 tile reuse，SPM tiling 无收益。
-- **layer_norm**：mean / variance 两个 single-load reduction pass 已改为
+- **layer_norm**：mean / variance / final normalize 都已改为
   `tl.make_block_ptr`，并把 `N` 固定为 constexpr，使
   `ConvertMemoryToSPM` 的静态 loop guard 可以证明边界。该路径现在命中
-  SPM：`make verify-layer_norm` 通过，LLIR 有 32 个 `addrspace(3)` 和
-  68 个 `fence iorw`。最终 normalize pass 仍有 3 个 load（x, gamma,
-  beta），需要 reduction matcher 泛化到多 load 才能覆盖。
+  SPM：`make verify-layer_norm` 通过，LLIR 有 38 个 `addrspace(3)` 和
+  78 个 `fence iorw`。最终 normalize pass 的 3 个 load（x, gamma,
+  beta）由 multi-load reduction/streaming matcher 覆盖。
 
 **结论**：
 
 - `matmul` 是当前成熟的 SPM performance workload，tier sidecar 工作正常。
 - `layer_norm` 现在是 reduction-path SPM coverage workload；32x64
-  `make cmp-layer_norm` 功能 PASS，但 ROI SPM 87,233 cycles vs cache
-  4,606 cycles，说明该小尺寸点主要暴露 MMIO/DMA 控制开销。
+  `make cmp-layer_norm` 功能 PASS，但 ROI SPM 125,593 cycles vs cache
+  6,138 cycles，说明该小尺寸点主要暴露 MMIO/DMA 控制开销。
 - `vector_add` 不需要 SPM（无 tile reuse），空 JSON 是正确行为。文档中"三个 workload 全部命中 Tier 3"的说法不准确，已修正。
-- `layer_norm` 剩余前置修复是泛化 reduction matcher 接受多 load。这属于
-  `compiler-robustness-backlog` 范畴。
 
 ---
 

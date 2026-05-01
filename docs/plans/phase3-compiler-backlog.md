@@ -33,9 +33,9 @@ Clarification on reduction coverage: there is no standalone `reduction`
 workload. Reduction lowering is the `transformReductionLoop` branch inside
 `ConvertMemoryToSPM`. It is structurally tested in
 `convert-memory-to-spm.mlir`, and its current production workload coverage is
-`layer_norm`: the mean and variance loops now use block pointers and hit the
-single-load reduction pattern. The final LayerNorm normalize loop remains a
-multi-load case and is still covered by P1 #11.
+`layer_norm`: the mean, variance, and final normalize loops now use block
+pointers and hit the reduction/streaming path. The final normalize loop
+exercises P1 #11's multi-load matcher with `x`, `gamma`, and `beta`.
 
 ---
 
@@ -54,20 +54,24 @@ resolved; only the explicitly open P1 / deferred items remain active backlog.
 2. **No SPM writeback for output tile.** Phase 3 plan keeps writeback in §4b, but the GEMM pass should at least leave a hook (or stop transforming when the output is also SPM-resident). Today the C tile still goes through cacheable `vector.transfer_write`.
 3. ~~**MVP gating leaves all current workloads untransformed.**~~ Resolved for
    `matmul`; `vector_add` is intentionally not transformed, and `layer_norm`
-   remains blocked on reduction matcher generalization.
+   now covers the reduction path including its final multi-load normalize loop.
 
-### 3b. Reduction prefetch — **partially resolved** (P0 #2 race fix done; single-load double buffering done; matcher generalization remains P1 #11)
+### 3b. Reduction prefetch — **resolved for current coverage** (P0 #2 race fix, double buffering, and P1 #11 multi-load matcher done)
 
 1. ~~**Single-buffer race (correctness bug).**~~ Resolved by reordering:
    read current → reduce → prefetch → `dma_wait`. The single-load tiled
    reduction path now uses two SPM buffers with a prologue prefetch, per-iteration
    `dma_wait`, alternate-buffer prefetch, and flipped buffer index. Tiny
    reductions remain MMIO/control-heavy even after overlap.
-2. **Pattern is too narrow** (`nonDotLoads.size() == 1`). LayerNorm's normalisation pass loads `x`, `gamma`, `beta` in the same loop; the matcher rejects it. Generalise to "all loads share the same induction variable as their leading index, and total tile bytes ≤ SPM".
+2. ~~**Pattern is too narrow** (`nonDotLoads.size() == 1`).~~ Resolved.
+   Loops with multiple non-dot tiled loads now transform when the loads share
+   the loop IV and fit in SPM. Covered structurally by
+   `@reduction_multi_load_prefetch` and in production by LayerNorm final
+   normalize (`x`, `gamma`, `beta`).
 
 ### 3c. Three-tier data-placement policy — **MVP landed** (see `three-tier-placement.md` M1-M8; coverage audited 2026-04-29)
 
-> ✅ Tier 2/3 MVP plumbing implemented via `three-tier-placement.md` M1-M8: `SPMSpaceManager`、`SPMTensorPlacement` pass、JSON sidecar、launcher `_alloc/_free_all`、harness 改造。当前覆盖：`matmul` 正常命中 Tier 3；`vector_add` 空 JSON 是设计预期（无循环）；`layer_norm` 的 mean/variance reduction pass 命中 Tier 3，final normalize loop 仍需 multi-load matcher。详见 `three-tier-placement.md` §4.1。
+> ✅ Tier 2/3 MVP plumbing implemented via `three-tier-placement.md` M1-M8: `SPMSpaceManager`、`SPMTensorPlacement` pass、JSON sidecar、launcher `_alloc/_free_all`、harness 改造。当前覆盖：`matmul` 正常命中 Tier 3；`vector_add` 空 JSON 是设计预期（无循环）；`layer_norm` 的 mean/variance/final normalize 命中 Tier 3。详见 `three-tier-placement.md` §4.1。
 
 The table below reflects the state after the 2026-04-29 audit; see `three-tier-placement.md` for full details.
 
@@ -131,8 +135,9 @@ Fix: add a compile-time assert (or emit a runtime guard that skips the SPM path)
   using `strides[0]`; covered by `@reduction_2d_non_leading_iv`.
 - ~~**Remaining performance issue:** the path is still single-buffered, so DMA
   latency is serially exposed.~~ Resolved for the single-load reduction path.
-  The remaining LayerNorm/softmax work is matcher generalization for loops with
-  multiple loads.
+- ~~**LayerNorm final normalize remained a multi-load miss.**~~ Resolved by
+  allowing multiple non-dot tiled loads sharing the loop IV. The path remains
+  MMIO/control-heavy on tiny shapes, but the matcher coverage is in place.
 
 ### 4. `DmaOpsToLLVM.cpp` (Phase 2 lowering, used by Phase 3)
 
@@ -158,18 +163,17 @@ B_back=+0xC00 for the 64x64 / 16x16 matmul smoke case.
 
 - `compiler.py:216-221` inserts the SPM pass and `:303` lowers the DMA ops. Both gated on `_AOT_MODE`. Good.
 - `matmul` now exercises the GEMM branch in production. `layer_norm` now
-  exercises the single-load reduction branch in production through the
-  mean/variance loops. `vector_add` remains a designed no-op. The remaining
-  `layer_norm` work in §E is specifically the final normalize loop with three
-  loads (`x`, `gamma`, `beta`), not the mean/variance reduction path.
+  exercises the reduction branch in production through the mean/variance
+  loops and the final 3-load normalize loop (`x`, `gamma`, `beta`).
+  `vector_add` remains a designed no-op.
 
 ### 7. Tests
 
 - `convert-memory-to-spm.mlir` exercises the pass on synthetic IR that already contains `vector.transfer_read` from `memref` (i.e. the post-`ConvertMemoryOps` form). It does **not** prove that anything from a Triton kernel actually reaches that form. The lit test passing tells us the pattern matches; it does **not** tell us the pattern fires in production.
 - Production firing is checked separately by workload verification. For
   reduction, `make verify-layer_norm` confirms `addrspace(3)` and
-  `fence iorw` in generated LLIR for the mean/variance reduction path, while
-  `make cmp-layer_norm` checks gem5 functional correctness.
+  `fence iorw` in generated LLIR for the mean/variance/final-normalize path,
+  while `make cmp-layer_norm` checks gem5 functional correctness.
 
 ---
 
@@ -226,12 +230,12 @@ Either way, **until this is fixed nothing in Phase 3 is actually exercised in pr
 ### P1 — Phase 3 spec compliance
 
 9. ~~**Implement Tier classification (§3c).**~~
-   ✅ Done. `SPMTensorPlacement` pass tags each tensor arg with tier 1/2/3. Launcher dispatches to `spm_malloc`/`malloc`/`dma_buf_malloc`. Coverage audit (2026-04-29): matmul → Tier 3; vector_add/layer_norm → no eligible tensors. See `three-tier-placement.md` §4.1.
+   ✅ Done. `SPMTensorPlacement` pass tags each tensor arg with tier 1/2/3. Launcher dispatches to `spm_malloc`/`malloc`/`dma_buf_malloc`. Current coverage: `matmul` args 0,1 → Tier 3; `layer_norm` args 0,1,2 → Tier 3; `vector_add` intentionally has no eligible tensors. See `three-tier-placement.md` §4.1.
 10. **Robust GEMM matcher.**
     - ~~Derive A/B identity from `vector.contract` lhs/rhs operands instead of transfer-read walk order.~~ ✅ Done for the standard GEMM fallback/fused path.
     - ~~Replace `getLoc()`-based cloned-read lookup with `IRMapping`-based lookup.~~ ✅ Done.
     - ~~Allow >2 loads in the loop as long as exactly two feed the contract.~~ ✅ Verified by `@gemm_extra_non_dot_load`.
-11. **Generalise reduction matcher** to "any number of loads sharing the loop IV", so LayerNorm's 3-load pass and softmax's typical body are accepted.
+11. ~~**Generalise reduction matcher** to "any number of loads sharing the loop IV", so LayerNorm's 3-load pass and softmax's typical body are accepted.~~ ✅ Done for canonical `vector.transfer_read` loops. Covered by `@reduction_multi_load_prefetch` and `make verify-layer_norm` / `make cmp-layer_norm`.
 12. ~~**Make `DMA_MMIO_BASE` a pass option** on `DmaOpsToLLVM`, and add a `useXspmInsn` boolean (default off) so Phase 4d only needs to flip a flag.~~ ✅ Done. `use-xspm-insn` is present and intentionally errors until the instruction lowering is implemented.
 
 ### P1-deferred — explicitly out of Phase 3 scope

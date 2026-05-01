@@ -32,8 +32,9 @@ automatically:
 - SPM size defaults have been unified to 256 KiB across the current path.
 - Tier sidecar coverage has been audited; `matmul` is the mature real SPM
   workload, `vector_add` is intentionally not transformed, and `layer_norm`
-  now enters the SPM path for its single-load mean/variance reduction passes.
-  Its final normalize pass still needs multi-load reduction matcher work.
+  now enters the SPM path for mean, variance, and final normalize. Final
+  normalize exercises the multi-load reduction/streaming matcher with `x`,
+  `gamma`, and `beta`.
 - Reduction support is not a standalone workload. It is the
   `transformReductionLoop` branch of `ConvertMemoryToSPM`; `layer_norm` is
   the production workload currently used to exercise it, while
@@ -94,13 +95,11 @@ The MVP framework is landed. Coverage audit (2026-04-29, `make verify`) confirme
 
 - `matmul`: args 0,1 → Tier 3. LLIR has 583 `addrspace(3)` + 80 `fence iorw`. Working.
 - `vector_add`: empty tier JSON. Expected — single-block kernel with no loop, no tile reuse. SPM tiling has no benefit here.
-- `layer_norm`: args 0 -> Tier 3 after rewriting the mean/variance
-  reduction passes to block pointers with constexpr `N`. LLIR has 32
-  `addrspace(3)` + 64 `fence iorw`; gem5 compare passes functionally.
-  This verifies the production use of `transformReductionLoop` for the two
-  single-load reduction loops; there is no separate `reduction` workload.
-  Remaining: the final normalize loop still has 3 loads (x, gamma, beta)
-  and needs reduction matcher generalization.
+- `layer_norm`: args 0,1,2 -> Tier 3 after rewriting all three passes to
+  block pointers with constexpr `N`. LLIR has 38 `addrspace(3)` + 78
+  `fence iorw`; gem5 compare passes functionally.  This verifies production
+  use of `transformReductionLoop` for the two single-load reductions and the
+  final 3-load normalize loop; there is no separate `reduction` workload.
 
 See `three-tier-placement.md` §4.1 for full analysis.
 
@@ -117,15 +116,15 @@ See `three-tier-placement.md` §4.1 for full analysis.
    double-buffer pipelining after the 2-D address fix.~~ Done: the lit
    test now verifies body-top wait + buffer flip + alternate-buffer
    prefetch, and `make cmp-layer_norm` passes with real SPM markers.
-   Baseline 32x64 ROI result after host init/reference were moved outside
-   the measured region: SPM 87,233 cycles vs cache 4,606 cycles, 512 DMA
-   transfers / 16,384 bytes, waitFraction 0.2993. This is a
+   Current 32x64 ROI result after final normalize also enters SPM: SPM
+   125,593 cycles vs cache 6,138 cycles, 1,280 DMA transfers / 40,960
+   bytes, waitFraction 0.4002. This is a
    correctness/coverage baseline, not a performance win.
 5. Continue compiler robustness:
-   GEMM A/B identity and cloned-read lookup have been hardened, and
-   `DmaOpsToLLVM` now has MMIO base / future `useXspmInsn` options. The
-   active remaining compiler item is reduction matching for multiple loads
-   sharing the loop IV.
+   GEMM A/B identity, cloned-read lookup, extra-load tolerance, reduction
+   multi-load matching, and `DmaOpsToLLVM` MMIO base / future `useXspmInsn`
+   options are done. The active remaining compiler item is bail-out cleanup /
+   verification for partially-mutated paths.
 
 ## Configuration Notes
 
