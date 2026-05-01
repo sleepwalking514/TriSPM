@@ -1,16 +1,18 @@
 [kernel]
 name = "layer_norm"
 env_prefix = ""
-tag_template = "{M_SIZE}x{N_SIZE}"
+tag_template = "{M}x{N}"
 
 [params]
-M_SIZE = 32
-N_SIZE = 64
+M = 32
+N = 64
 CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
 
 [build]
 c_macros = [
-    "M_SIZE={M_SIZE}",
-    "N_SIZE={N_SIZE}",
+    "M={M}",
+    "N={N}",
     "CHECK_RESULT={CHECK_RESULT}",
+    "LAYERNORM_FLUSH_BEFORE_ROI={LAYERNORM_FLUSH_BEFORE_ROI}",
 ]

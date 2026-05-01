@@ -174,8 +174,8 @@
 
 - `matmul` 是当前成熟的 SPM performance workload，tier sidecar 工作正常。
 - `layer_norm` 现在是 reduction-path SPM coverage workload；32x64
-  `make cmp-layer_norm` 功能 PASS，但 SPM 656,898 cycles vs cache
-  121,284 cycles，说明该小尺寸点主要暴露 MMIO/DMA 控制开销。
+  `make cmp-layer_norm` 功能 PASS，但 ROI SPM 87,233 cycles vs cache
+  4,606 cycles，说明该小尺寸点主要暴露 MMIO/DMA 控制开销。
 - `vector_add` 不需要 SPM（无 tile reuse），空 JSON 是正确行为。文档中"三个 workload 全部命中 Tier 3"的说法不准确，已修正。
 - `layer_norm` 剩余前置修复是泛化 reduction matcher 接受多 load。这属于
   `compiler-robustness-backlog` 范畴。

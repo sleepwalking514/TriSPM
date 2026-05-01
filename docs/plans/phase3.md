@@ -96,7 +96,7 @@ The MVP framework is landed. Coverage audit (2026-04-29, `make verify`) confirme
 - `vector_add`: empty tier JSON. Expected — single-block kernel with no loop, no tile reuse. SPM tiling has no benefit here.
 - `layer_norm`: args 0 -> Tier 3 after rewriting the mean/variance
   reduction passes to block pointers with constexpr `N`. LLIR has 32
-  `addrspace(3)` + 68 `fence iorw`; gem5 compare passes functionally.
+  `addrspace(3)` + 64 `fence iorw`; gem5 compare passes functionally.
   This verifies the production use of `transformReductionLoop` for the two
   single-load reduction loops; there is no separate `reduction` workload.
   Remaining: the final normalize loop still has 3 loads (x, gamma, beta)
@@ -117,8 +117,9 @@ See `three-tier-placement.md` §4.1 for full analysis.
    double-buffer pipelining after the 2-D address fix.~~ Done: the lit
    test now verifies body-top wait + buffer flip + alternate-buffer
    prefetch, and `make cmp-layer_norm` passes with real SPM markers.
-   Baseline 32x64 result: SPM 656,898 cycles vs cache 121,284 cycles,
-   512 DMA transfers / 16,384 bytes, waitFraction 0.0398. This is a
+   Baseline 32x64 ROI result after host init/reference were moved outside
+   the measured region: SPM 87,233 cycles vs cache 4,606 cycles, 512 DMA
+   transfers / 16,384 bytes, waitFraction 0.2993. This is a
    correctness/coverage baseline, not a performance win.
 5. Continue compiler robustness:
    GEMM A/B identity and cloned-read lookup have been hardened, and
