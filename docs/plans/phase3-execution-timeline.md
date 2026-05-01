@@ -53,8 +53,11 @@ tasks:
   - id: tier1-backlog
     content: 在 P3 和 Tier 2 证据链稳定后，规划 `three-tier-placement.md` §6.1 的 Tier 1 resident SPM 完整实现。
     status: pending
+  - id: graph-placement-backlog
+    content: 在 Phase 5 transformer pipeline 前实现 `three-tier-placement.md` §2.1 / §6.2 的 graph-level conservative placement：中间 activation / producer output 默认 Tier 2，Tier 3 只给 external read-only DMA-only streaming tensor。
+    status: pending
   - id: reuse-rules-backlog
-    content: 仅在新 workload 需要时扩展 `three-tier-placement.md` §6.2 的 `has_scalar_reuse` 规则。
+    content: 仅在新 workload 需要时扩展 `three-tier-placement.md` §6.3 的 `has_scalar_reuse` 规则。
     status: pending
   - id: doc-refresh
     content: P3 收敛后统一刷新 `phase3.md` 和 `phase3-compiler-backlog.md` 中已解决但仍标记为 NOT VERIFIED / NOT IMPLEMENTED 的条目，消除文档状态滞后。
@@ -75,7 +78,7 @@ isProject: false
 - 文档中"三个 workload 全部命中 Tier 3"的说法已修正。`verify-spm-fires` 工具已落地：`matmul` 与 `layer_norm` 通过 `make verify-<kernel>`；`vector_add` 预期未命中 SPM（见 `three-tier-placement.md` §4.1）。
 - `../evidence/l2_warming.md` Tier 2 L2-warming 验证完成（源码分析 + 微基准 2.8× 加速数据）。
 - `phase3-compiler-backlog.md` 里的 P1 稳健性事项已大幅收敛：GEMM >2 loads 和 reduction matcher 泛化已完成，剩余 bail-out 清理/验证仍会影响后续 workload 扩展。`DmaOpsToLLVM` 的 MMIO base/useXspmInsn 选项已完成。
-- `three-tier-placement.md` §6 是明确 backlog：§6.3 的验证补完已由工具化和 L2-warming evidence 覆盖；§6.1 Tier 1 和 §6.2 reuse 规则扩展应排在 reduction 性能和 Tier 2 数据闭环之后。
+- `three-tier-placement.md` §6 是明确 backlog：§6.4 的验证补完已由工具化和 L2-warming evidence 覆盖；§6.2 graph-level placement 是 Phase 5 transformer 前的 P0，§6.1 Tier 1 和 §6.3 reuse 规则扩展按 workload 需求推进。
 
 ## Timeline Reading Order
 
@@ -90,7 +93,8 @@ isProject: false
 5. Done: fix the `transformReductionLoop` 2-D non-leading-IV prefetch address bug.
 6. Done: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) and record the first `layer_norm` SPM coverage/perf baseline.
 7. Current: finish remaining `phase3-compiler-backlog.md` P1 robustness work: bail-out cleanup/verification.
-8. Later: after Tier 2 evidence and reduction performance stabilize, enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.2 for workload-driven scalar-reuse rule expansion.
+8. Next high priority for end-to-end transformer work: implement `three-tier-placement.md` §2.1 / §6.2 graph-level conservative placement so intermediate activations remain cacheable and Tier 3 is limited to external read-only DMA-only streaming tensors.
+9. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
 
 ## 阶段化执行计划
 

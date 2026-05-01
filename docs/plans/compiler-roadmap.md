@@ -233,7 +233,7 @@ The critical insight (raised by advisor): if a vector exceeds SPM capacity and i
 |------|-----------|-----------|-----------|
 | **1. SPM-resident** | `total_size ≤ SPM_capacity` AND has scalar reuse | SPM (uncacheable) | Entire vector fits — scalar loads go through `spm_port` at ≈L1 latency |
 | **2. Cacheable + DMA tiling** | `total_size > SPM_capacity` AND has scalar reuse | **Cacheable** DRAM | Vector work uses DMA→SPM tiling; scalar work hits L2 (see below) |
-| **3. Uncacheable DMA buffer** | No scalar reuse | Uncacheable DRAM | Maximum SPM benefit, zero cache pollution |
+| **3. Uncacheable DMA buffer** | No scalar reuse, no downstream cache/CPU consumer, and graph metadata proves external read-only DMA-only use | Uncacheable DRAM | Maximum SPM benefit, zero cache pollution |
 
 **Tier 2 is the key design point.** It guarantees SPM is **never worse than cache baseline**, and is often better:
 
@@ -252,7 +252,9 @@ The only scenario where L2 warmth fails is if total vector size exceeds L2 capac
 
 #### Applies to both input and output tensors
 
-The placement decision is made at **tensor allocation time** (in the harness or compiler), before the kernel runs. It applies to outputs too: if matmul's C matrix will later be consumed by scalar ops (e.g., a subsequent elementwise kernel), C should be allocated in cacheable range from the start. DMA writeback naturally goes to C's pre-allocated address — there is no separate "writeback destination" decision.
+The placement decision is made at **tensor allocation time** (in the harness or compiler), before the kernel runs. It applies to outputs too: if matmul's C matrix will later be consumed by another kernel, C should be allocated in cacheable range from the start. DMA writeback naturally goes to C's pre-allocated address — there is no separate "writeback destination" decision.
+
+For an end-to-end transformer pipeline, the default policy is graph-aware and conservative: **intermediate activations and producer outputs are Tier 2 cacheable unless the graph proves they are terminal DMA-only streaming tensors.** Tier 3 is reserved for external read-only inputs/weights that have no scalar/fallback/downstream cache consumer. This keeps a cacheable activation backbone across matmul, layer norm, residual, attention, and FFN kernels while still allowing selective uncacheable inputs where they are genuinely useful.
 
 #### Compiler analysis for tier classification
 
@@ -262,7 +264,8 @@ Detection of `has_scalar_reuse` at compile time on Triton IR:
 
 **Basic heuristic** (sufficient for MVP):
 - Loads inside `scf.for` with block-pointer advancement → SPM-eligible (Tier 1 or 2 based on size)
-- Loads with no subsequent scalar consumers and predictable access → Tier 3 (uncacheable)
+- Kernel-local loads with no subsequent scalar consumers and predictable access → Tier 3 only in single-kernel MVP verification
+- Graph-level transformer mode: producer outputs / intermediate activations → Tier 2; external read-only DMA-only streaming inputs/weights → Tier 3
 - Scalar loads, irregular access, low-reuse elementwise ops, accumulators → cache (not SPM at all)
 
 #### Paper angle
@@ -321,8 +324,8 @@ Flash attention is the hardest kernel because it has multiple tensors competing 
 ### 4b. SPM writeback for output tiles
 - DMA SPM→DRAM for output tiles (C in GEMM, O in attention) after compute loops
 - Writeback destination is the tensor's pre-allocated address (determined by Phase 3c placement policy — not a separate runtime decision)
-- If the output tensor was allocated in cacheable range (Tier 2: has scalar consumers), writeback warms L2 automatically
-- If allocated in uncacheable range (Tier 3: no scalar reuse), writeback goes directly to DRAM with no cache pollution
+- If the output tensor was allocated in cacheable range (Tier 2: default for producer outputs / intermediate activations), writeback warms L2 automatically
+- If graph-level placement proves a terminal output has no downstream cache/CPU consumer, it may be allocated in uncacheable range; otherwise outputs stay cacheable
 
 ### 4c. Inter-kernel SPM lifetime management
 - Each kernel gets full SPM (no cross-kernel sharing needed — kernels run sequentially)
@@ -375,23 +378,26 @@ residual_add(X2, ffn_out, output)          // elementwise (cache)
    - **Selective SPM**: only GEMM + attention use SPM; elementwise stays in cache
    - Collect: total cycles, cache miss rate, DMA utilization, SPM hit rate
 
-### Kernel fusion as the cross-kernel reuse mechanism
+### Graph-level placement first; fusion second
 
-`SPMTensorPlacement` is a **per-kernel** pass. Its tier classification analyzes scalar
-reuse only within the function being compiled, so a chain like
-`matmul(A, B, C) → layer_norm(C, …)` cannot automatically place `C` in Tier 2 to keep
-it L2-warm for the next kernel — at the boundary between two AOT-compiled kernels,
-the compiler has no shared view of access patterns. Building a cross-kernel placement
-analysis would require a multi-kernel IR (or a whole-program pass driving the AOT
-pipeline), which is significant scope.
+`SPMTensorPlacement` is currently a **per-kernel** pass. Its tier classification
+analyzes scalar reuse only within the function being compiled, so a chain like
+`matmul(A, B, C) → matmul(C, W, D)` can misclassify `C` if the second matmul is
+viewed in isolation. The transformer pipeline therefore needs a lightweight
+graph-level placement manifest before Phase 5 evaluation.
 
-**Use kernel fusion instead.** Triton's programming model already supports authoring
-multiple computation steps inside a single `@triton.jit` function; the resulting one
-kernel exposes one set of arguments to `SPMTensorPlacement`, and intermediate tensors
-(e.g., `X_norm` between LN and the QKV projection) live in registers/SPM for the
-duration of the kernel — they never round-trip to DRAM, so cross-kernel reuse
-collapses into intra-kernel reuse and the existing per-kernel placement analysis is
-sufficient.
+The conservative graph rule is:
+
+- Intermediate activations and producer outputs form a **cacheable activation
+  backbone** and default to Tier 2.
+- Tier 3 is limited to external read-only DMA-only streaming inputs/weights with
+  no scalar, fallback, or downstream cache consumer.
+- Tier 1 is reserved for future small SPM-resident hot state.
+- Unknown lifetime or consumer information falls back to Tier 2.
+
+This makes cross-kernel chaining correct without requiring fusion. Fusion remains
+valuable as a local optimization, but it should not be the mechanism that makes
+tensor placement safe.
 
 Fusion candidates for the decoder block:
 
@@ -404,12 +410,9 @@ Fusion candidates for the decoder block:
 | `flash attention` | Q·Kᵀ, softmax, ·V intermediates | Already a fusion by construction |
 
 Each fusion is a **kernel-source change** (one `@triton.jit` function instead of two),
-not a compiler change. The SPM pipeline (placement, double-buffer, sidecar) treats the
-fused kernel as a normal single kernel.
-
-This decision keeps the compiler scope per-kernel and pushes cross-kernel data
-locality to the kernel-author boundary — consistent with how Triton itself treats
-fusion (manual, not automatic).
+not a compiler requirement. The SPM pipeline (placement, double-buffer, sidecar) treats
+the fused kernel as a normal single kernel, while graph-level placement handles the
+unfused boundaries that still remain.
 
 ### Paper evaluation metrics
 - End-to-end latency: full decoder block, SPM vs cache
@@ -530,9 +533,10 @@ Run the same kernels on gem5 in cache-only mode (no SPM hardware, no ConvertMemo
 
 ### 6b. Tier 2 Placement Policy And Evidence [P0]
 
-The three-tier placement policy is the paper's most valuable insight. The Tier 2/3 MVP plumbing has landed, and the L2-warming side effect is verified in `../evidence/l2_warming.md`; the remaining work is to connect Tier 2 to broader scalar-reuse workloads and compare it against cache baselines.
+The three-tier placement policy is the paper's most valuable insight. The Tier 2/3 MVP plumbing has landed, and the L2-warming side effect is verified in `../evidence/l2_warming.md`; the remaining work is to connect Tier 2 to broader scalar-reuse workloads, add graph-level conservative placement for transformer edges, and compare it against cache baselines.
 
 - Extend Tier 2 workload coverage: tensors with scalar reuse that exceed SPM capacity should go to cacheable DRAM.
+- Implement graph-level placement: intermediate activations and producer outputs default to Tier 2, while Tier 3 is reserved for external read-only DMA-only streaming tensors.
 - Use the completed L2-warming evidence as the mechanism proof: after DMA reads from cacheable DRAM, L2 holds data copies.
 - Compare Tier 2 vs pure cache on real kernels: prove "cacheable + DMA tiling" is never worse than cache (performance floor guarantee).
 

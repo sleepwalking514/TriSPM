@@ -91,6 +91,13 @@ not as the headline criterion.
 - Tier 2: cacheable DRAM plus DMA tiling, needed for the L2-warming claim.
 - Tier 3: uncacheable DMA buffer, useful for pure vector workloads.
 
+For single-kernel Phase 3 verification, the current MVP sidecar can still
+classify no-scalar-reuse inputs as Tier 3. For end-to-end transformer work,
+the policy is stricter and graph-aware: intermediate activations and kernel
+outputs stay Tier 2 cacheable by default; Tier 3 is reserved for external
+read-only DMA-only streaming inputs/weights; Tier 1 is future SPM-resident hot
+state. See `three-tier-placement.md` §2.1.
+
 The MVP framework is landed. Coverage audit (2026-04-29, `make verify`) confirmed:
 
 - `matmul`: args 0,1 → Tier 3. LLIR has 583 `addrspace(3)` + 80 `fence iorw`. Working.
@@ -125,6 +132,10 @@ See `three-tier-placement.md` §4.1 for full analysis.
    multi-load matching, and `DmaOpsToLLVM` MMIO base / future `useXspmInsn`
    options are done. The active remaining compiler item is bail-out cleanup /
    verification for partially-mutated paths.
+6. Before the transformer pipeline, implement graph-level conservative
+   placement (`three-tier-placement.md` §2.1 / §6.2): cacheable activation
+   backbone, selective uncacheable streaming inputs, and future Tier-1 hot
+   state.
 
 ## Configuration Notes
 
@@ -138,6 +149,8 @@ specific experiment intentionally overrides the environment.
 
 ## What Is Not Phase 3 Critical Path
 
+- Graph-level conservative placement is not needed for the single-kernel P3
+  headline, but it is P0 for Phase 5 transformer evaluation.
 - Tier 1 resident SPM needs func arg addrspace(3), harness pre-launch DMA,
   and an SPM layout manifest. Keep it in `three-tier-placement.md` §6.1 until Tier 2
   evidence is stable.

@@ -57,11 +57,12 @@
 | D2 | JSON sidecar `<kernel>_tiers.json` → driver.py 生成 `<kernel>_alloc(idx, size)` 派发函数 | harness 单点改 malloc 即可 |
 | D3 | MVP 只做 Tier 2/3 plumbing；Tier 1 框架预留 tag 不实现 | Tier 1 完整实现 + 配套 workload 进 §6 |
 | D4 | `has_scalar_reuse` 保守语义：scalar load **或** `vector<1xT>` transfer_read 算 reuse | 扩展规则进 §6 |
-| D5 | 进入 placement 的张量必中一个 tier，无 conservative 开关。`no scalar reuse → Tier 3` 直接生效 | 仅 matmul 命中（见 §4.1） |
+| D5 | Kernel-local MVP 中，进入 placement 的张量必中一个 tier，无 conservative 开关。`no scalar reuse → Tier 3` 直接生效 | 仅用于单 kernel 验证；跨算子规则见 §2.1 |
 | D6 | 三个 workload harness 全部改造 | 否则 alloc 派发链路无法验证 |
 | D7 | 选择 **b1**：MVP 就引入统一 `SPMSpaceManager`，`ConvertMemoryToSPM` staging 也从它分配 | Tier 1 之后接入时复用同一套 SPM layout，不再重构 staging |
 
 > D5 含义补充：tier 分析只对"被 ConvertMemoryToSPM 视为候选的张量"打标。其他 memref（小常量、未被 tile 的张量）走默认 `malloc`，与 tier 系统正交，无冲突。
+> 对完整 transformer / 多 kernel pipeline，D5 不能作为长期 tensor-placement 规则直接外推。`no scalar reuse → Tier 3` 只描述当前单 kernel MVP；跨算子时必须按 tensor edge 的 producer/consumer 和后续访问方式重新判定。
 >
 > D7 含义补充：统一 allocator 是**编译期 SPM 地址空间/offset 管理器**，不是把所有 tier 都改成 runtime `spm_malloc`。Tier 1 tensor 才是 resident SPM allocation；Tier 2/3 tensor 仍分别由 `malloc` / `dma_buf_malloc` 分配在 DRAM，只是它们进入 kernel 时使用的 temporary staging buffer 也由 `SPMSpaceManager` 分配 SPM offset。
 
@@ -69,6 +70,40 @@
 
 - **Q1 临时搬运 vs 显式分配仍不完全一样**：两者都占 SPM 地址、都由同一个 `SPMSpaceManager` 防冲突；区别仍是生命周期。Tier 1 是 tensor 常驻（跨 kernel call，直到显式释放），Tier 2/3 staging 是 kernel/loop 临时 buffer。
 - **Q2 "装得下 + 无 reuse" 仍默认 Tier 3**：统一 allocator 只解决 SPM 地址冲突，不改变性能判断。无 scalar reuse 时，Tier 1 常驻不会让 vector load 更快，却会付出 pre-DMA 整 tensor 成本并占住 SPM；Tier 3 用 staging 拿到同样的 SPM vector load，通常更划算。
+
+### 2.1 高优先级：跨算子保守 placement 规则
+
+> **Priority: P0 for transformer end-to-end evaluation.** 这条规则应在做
+> Phase 5 transformer pipeline 前落地，否则单 kernel 的 Tier 3 选择会把
+> 中间 activation 错放到 uncacheable DRAM，破坏后续算子的 cache / scalar /
+> fallback 访问。
+
+设计口径：**cacheable activation backbone + selective uncacheable streaming inputs + optional SPM-resident hot state**。
+
+核心原则：
+
+- **Tier 3 不是 tensor 的长期属性**。它只适合短生命周期、只读、只被当前 kernel 通过 DMA tile 消费、没有下游 CPU/scalar/fallback 访问的 streaming input。
+- **中间 activation 默认 Tier 2**。任何 producer output 若会被后续 matmul、layer_norm、residual、softmax、activation 或 fallback kernel 读取，都保持 cacheable DRAM。下游 kernel 仍可从 Tier 2 cacheable DRAM DMA tile 到 SPM，并获得 L2-warming 副作用。
+- **Kernel output 默认 Tier 2**。例如连续 matmul `C = A @ B; D = C @ W` 中，`C` 是 producer output + consumer input，必须保持 cacheable；不能因为下一个 matmul 的局部 input 规则把 `C` 改成 Tier 3。
+- **外部只读 streaming input / weight 可以 Tier 3**，前提是它没有 scalar reuse、不会作为中间 activation 传给别的 cache path，并且避免 cache pollution 的收益明确。否则保守回退 Tier 2。
+- **有 scalar reuse 或不确定 downstream use 的 tensor 一律 Tier 2**。保守 cacheable 比错误 uncacheable 更适合完整 pipeline，因为它保留 cache baseline、host check、fallback kernel 和跨算子组合性。
+- **Tier 1 留给小型 hot state**：能装入 SPM、跨 kernel 重复使用、且有明确 reuse 的状态，例如 softmax / attention 的小型中间量、KV-cache tile 或 LayerNorm/attention 辅助统计。Tier 1 不作为当前 MVP 的默认 fallback。
+
+因此，单 kernel 的 placement pass 后续需要升级为 graph/edge-aware placement：
+
+| Tensor edge 类型 | 默认 tier | 说明 |
+|---|---:|---|
+| Producer output / intermediate activation | 2 | 保持 cacheable backbone，支持下游任意 kernel |
+| Downstream 有 scalar / reduction / fallback 访问 | 2 | 利用 L2-warming，避免 UC 惩罚 |
+| 外部只读、DMA-only、无 downstream cache use | 3 | 避免 cache pollution，适合纯 streaming input/weight |
+| 小型、长期、跨 kernel reuse 的 hot state | 1（未来） | 需要 manifest + pre-DMA + addrspace(3) arg |
+| 无法证明 lifetime / downstream use | 2 | 保守默认 |
+
+实现建议：
+
+- 在 end-to-end transformer harness / graph driver 中维护 tensor-edge metadata：producer、consumer 列表、是否 external weight/input、是否 intermediate activation、是否有 scalar/fallback consumer、大小、生命周期。
+- Kernel-local `_tiers.json` 继续用于单 kernel smoke / Phase 3 验证；graph mode 应由上层 placement manifest 覆盖或修正 per-kernel tier 决策。
+- 第一版 graph placement 不依赖 fusion。Fusion 只作为局部优化（如 matmul+bias、residual+layer_norm、softmax 内部），不能作为跨算子正确性的基础。
 
 ---
 
@@ -201,12 +236,18 @@
 - SPM layout manifest：把 Tier 1 resident allocation 的 offset/size 暴露给 harness 和 compiler，保证 pre-DMA 目标地址与 IR 中的 SPM 地址一致。
 - 配套 workload：softmax / 小型 attention，要求有 scalar reuse + 整 tensor 能装下 SPM。
 
-### 6.2 `has_scalar_reuse` 扩展规则 (D4)
+### 6.2 Graph-level placement for transformer pipeline (P0)
+- 实现 §2.1 的 tensor-edge metadata 和 graph placement manifest。
+- 规则优先级：intermediate activation / producer output 默认 Tier 2；Tier 3 只用于 external read-only DMA-only streaming tensors；不确定时 Tier 2。
+- graph mode 需要能覆盖 kernel-local `_tiers.json`，避免连续 matmul 中 `C` 作为下游 input 时被错误分到 UC。
+- 最小验证 workload：`matmul -> matmul`，确认第一个 matmul 的 C 仍为 cacheable，第二个 matmul 可以从 cacheable C 做 DMA tiling；随后扩展到 `matmul -> residual/layer_norm -> matmul`。
+
+### 6.3 `has_scalar_reuse` 扩展规则 (D4)
 - `vector.extract` 抽出 scalar 后再 broadcast 算 scalar reuse。
 - scf.for 外的 load 也算（当前只看循环内 user）。
 - `tt.reduce` 内的中间 scalar 算 reuse。
 - 触发条件：当未来引入需要更宽语义的 workload 时再加，避免过早泛化。
 
-### 6.3 验证补完
+### 6.4 验证补完
 - `make verify-spm-fires` 引入 tier 检查（phase3-compiler-backlog.md §E P2 #14 的延伸）— 已由 `make verify` / `make verify-<kernel>` 覆盖。
 - L2-warming 实验数据点：tier 2 vs cache baseline，要求新写 long-vector + scalar-tail workload — 已由 `../evidence/l2_warming.md` 的 `dma_l2_warming` microbenchmark 覆盖。
