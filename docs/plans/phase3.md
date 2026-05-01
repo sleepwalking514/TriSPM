@@ -39,6 +39,11 @@ automatically:
   `transformReductionLoop` branch of `ConvertMemoryToSPM`; `layer_norm` is
   the production workload currently used to exercise it, while
   `convert-memory-to-spm.mlir` provides the synthetic structural lit coverage.
+- Compiler robustness for the current Phase 3 workload set is closed:
+  GEMM matching derives A/B identity from the contract operands, cloned reads
+  use `IRMapping`, extra non-dot loads are tolerated, reduction matching accepts
+  multiple shared-IV streams, and GEMM/reduction bail-out paths clean up
+  partially inserted prologue work.
 - Tier 2 L2-warming has been verified by the `dma_l2_warming`
   microbenchmark; the 4K-32K working-set sweep confirms near-100% L2 hits
   after DMA and about 2.8x speedup over the cold scalar-read phase.
@@ -127,11 +132,11 @@ See `three-tier-placement.md` §4.1 for full analysis.
    125,593 cycles vs cache 6,138 cycles, 1,280 DMA transfers / 40,960
    bytes, waitFraction 0.4002. This is a
    correctness/coverage baseline, not a performance win.
-5. Continue compiler robustness:
+5. ~~Finish compiler robustness for current Phase 3 coverage:~~ Done.
    GEMM A/B identity, cloned-read lookup, extra-load tolerance, reduction
    multi-load matching, and `DmaOpsToLLVM` MMIO base / future `useXspmInsn`
-   options are done. The active remaining compiler item is bail-out cleanup /
-   verification for partially-mutated paths.
+   options are done. GEMM/reduction bail-out cleanup is also done; lit tests
+   cover dynamic-step no-DMA cases and partial prologue cleanup.
 6. Before the transformer pipeline, implement graph-level conservative
    placement (`three-tier-placement.md` §2.1 / §6.2): cacheable activation
    backbone, selective uncacheable streaming inputs, and future Tier-1 hot
@@ -165,5 +170,5 @@ specific experiment intentionally overrides the environment.
 - `../archive/matmul-spm-lowering-closure.md`: archived matmul SPM lowering closure and P3 measurements.
 - `three-tier-placement.md`: three-tier placement design and backlog.
 - `../evidence/l2_warming.md`: Tier 2 L2-warming verification results.
-- `phase3-compiler-backlog.md`: broader Phase 3 audit and remaining compiler robustness tasks.
+- `phase3-compiler-backlog.md`: broader Phase 3 compiler audit and closure record.
 - `phase3-execution-timeline.md`: current execution order and task list.

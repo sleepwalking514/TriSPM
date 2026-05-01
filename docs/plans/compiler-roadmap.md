@@ -150,7 +150,7 @@ fence iorw, iorw
 
 ---
 
-## Phase 3: SPM Transformation Pass — GEMM First (Core) ← **WE ARE HERE**
+## Phase 3: SPM Transformation Pass — GEMM First (Core) ✅ CURRENTLY CLOSED FOR SINGLE-KERNEL COVERAGE
 
 **Goal:** An MLIR pass that transforms tiled DRAM loads into double-buffered DMA-to-SPM transfers. Start with GEMM (the highest-value pattern), then generalize.
 
@@ -252,7 +252,7 @@ The only scenario where L2 warmth fails is if total vector size exceeds L2 capac
 
 #### Applies to both input and output tensors
 
-The placement decision is made at **tensor allocation time** (in the harness or compiler), before the kernel runs. It applies to outputs too: if matmul's C matrix will later be consumed by another kernel, C should be allocated in cacheable range from the start. DMA writeback naturally goes to C's pre-allocated address — there is no separate "writeback destination" decision.
+The placement decision is made at **tensor allocation time** (in the harness or compiler), before the kernel runs. It applies to outputs too: if matmul's C matrix will later be consumed by another kernel, C should be allocated in cacheable range from the start. Once Phase 4b output-tile DMA writeback exists, that writeback should target the tensor's pre-allocated address; there should not be a separate runtime "writeback destination" decision.
 
 For an end-to-end transformer pipeline, the default policy is graph-aware and conservative: **intermediate activations and producer outputs are Tier 2 cacheable unless the graph proves they are terminal DMA-only streaming tensors.** Tier 3 is reserved for external read-only inputs/weights that have no scalar/fallback/downstream cache consumer. This keeps a cacheable activation backbone across matmul, layer norm, residual, attention, and FFN kernels while still allowing selective uncacheable inputs where they are genuinely useful.
 
@@ -589,11 +589,11 @@ SPM vs cache cost-effectiveness at equal silicon area:
 ```
 Phase 1 (AOT cross-compile) ✅ COMPLETE
   └─> Phase 2 (DMA dialect ops + address spaces + lowering) ✅ COMPLETE
-        └─> Phase 3 (SPM pass: GEMM → reduction → data placement) ← CURRENT
-              ├─> Phase 4 (Attention + multi-kernel SPM + optimizations)
+        └─> Phase 3 (SPM pass: GEMM → reduction → data placement) ✅ current single-kernel coverage closed
+              ├─> Phase 4 (Attention + multi-kernel SPM + optimizations) ← CURRENT NEXT
               │     └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
-                    ├─ 6a Cache baseline [ready once Phase 3 is done]
+                    ├─ 6a Cache baseline [Phase 3 matmul/layer_norm baseline ready]
                     ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence done]
                     ├─ 6c Additional workloads [after Phase 3/4 pattern support]
                     ├─ 6d Breakdown analysis [built on 6a data]

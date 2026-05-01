@@ -1,6 +1,6 @@
 ---
 name: TriSPM Phase 3 Execution Timeline
-overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲和 multi-load reduction matcher 均已完成。当前剩余 compiler 主线是 bail-out cleanup/verification。
+overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher 和 bail-out cleanup/verification 均已完成。当前主线转向 graph-level placement、fused DMA reuse tuning、Phase 4/6 workload 与评测扩展。
 tasks:
   - id: p3-profile-overlap
     content: 画清 matmul prefetch enqueue、current buffer 读取、下一轮 dma_wait 成功之间的时间线，确认是否存在真实 overlap。
@@ -48,8 +48,9 @@ tasks:
     status: completed
     note: 2026-04-30 修复。根因：prefetch 地址计算始终使用 strides[0]（leading stride），但 IV 可能索引非 leading 维度。修复为动态查找 IV 所索引维度的 stride。新增 lit 测试 `@reduction_2d_non_leading_iv`（memref<8x64xf32> IV 在 dim 1）验证 byte offset 使用 stride=1*4=4 而非 64*4=256。
   - id: compiler-robustness-backlog
-    content: "P3 收敛后补 compiler robustness：robust GEMM matcher 已完成 A/B lhs/rhs 识别、`IRMapping` cloned-read lookup 和 extra-load 覆盖；reduction matcher 已泛化到多 load 共享 loop IV；`DmaOpsToLLVM` 已增加 MMIO base/useXspmInsn 选项。剩余：修复/验证 bail-out 路径 prologue DMA 残留。"
-    status: pending
+    content: "P3 收敛后补 compiler robustness：robust GEMM matcher 已完成 A/B lhs/rhs 识别、`IRMapping` cloned-read lookup 和 extra-load 覆盖；reduction matcher 已泛化到多 load 共享 loop IV；`DmaOpsToLLVM` 已增加 MMIO base/useXspmInsn 选项；GEMM/reduction bail-out 路径已清理并验证。"
+    status: completed
+    note: 2026-05-01 完成。compiler 子模块 `26eb944ad Clean up SPM transform bailouts` 为 `transformGemmLoop` / `transformReductionLoop` 加入插入回滚与边界 bail-out 覆盖；`convert-memory-to-spm.mlir` 新增 dynamic-step no-DMA 和 partial-prologue cleanup 测试。
   - id: tier1-backlog
     content: 在 P3 和 Tier 2 证据链稳定后，规划 `three-tier-placement.md` §6.1 的 Tier 1 resident SPM 完整实现。
     status: pending
@@ -77,7 +78,7 @@ isProject: false
 - `three-tier-placement.md` 的 MVP 代码框架基本落地。当前覆盖：`matmul` 正常命中 Tier 3（args 0,1）；`vector_add` 空 JSON 是设计预期（单 block 无循环）；`layer_norm` 在 mean/variance/final normalize 命中 Tier 3（args 0,1,2）。详见 `three-tier-placement.md` §4.1。
 - 文档中"三个 workload 全部命中 Tier 3"的说法已修正。`verify-spm-fires` 工具已落地：`matmul` 与 `layer_norm` 通过 `make verify-<kernel>`；`vector_add` 预期未命中 SPM（见 `three-tier-placement.md` §4.1）。
 - `../evidence/l2_warming.md` Tier 2 L2-warming 验证完成（源码分析 + 微基准 2.8× 加速数据）。
-- `phase3-compiler-backlog.md` 里的 P1 稳健性事项已大幅收敛：GEMM >2 loads 和 reduction matcher 泛化已完成，剩余 bail-out 清理/验证仍会影响后续 workload 扩展。`DmaOpsToLLVM` 的 MMIO base/useXspmInsn 选项已完成。
+- `phase3-compiler-backlog.md` 里的 P1 稳健性事项已闭环：GEMM >2 loads、reduction matcher 泛化、DMA lowering options、GEMM/reduction bail-out cleanup/verification 均已完成。后续 workload 扩展若出现新 IR 形态再增量补 matcher。
 - `three-tier-placement.md` §6 是明确 backlog：§6.4 的验证补完已由工具化和 L2-warming evidence 覆盖；§6.2 graph-level placement 是 Phase 5 transformer 前的 P0，§6.1 Tier 1 和 §6.3 reuse 规则扩展按 workload 需求推进。
 
 ## Timeline Reading Order
@@ -92,9 +93,10 @@ isProject: false
 4. Done: complete the Phase 3 tooling baseline: `make verify`, unified `make run-<kernel>` / `make cmp-<kernel>`, and stats CSV export. Remaining Phase 6 comparison tooling moves to the roadmap.
 5. Done: fix the `transformReductionLoop` 2-D non-leading-IV prefetch address bug.
 6. Done: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) and record the first `layer_norm` SPM coverage/perf baseline.
-7. Current: finish remaining `phase3-compiler-backlog.md` P1 robustness work: bail-out cleanup/verification.
-8. Next high priority for end-to-end transformer work: implement `three-tier-placement.md` §2.1 / §6.2 graph-level conservative placement so intermediate activations remain cacheable and Tier 3 is limited to external read-only DMA-only streaming tensors.
-9. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
+7. Done: finish `phase3-compiler-backlog.md` P1 robustness work, including bail-out cleanup/verification.
+8. Current high priority for end-to-end transformer work: implement `three-tier-placement.md` §2.1 / §6.2 graph-level conservative placement so intermediate activations remain cacheable and Tier 3 is limited to external read-only DMA-only streaming tensors.
+9. Current optimization line: continue `spm-dma-reuse.md` fused microM-aware scheduler tuning and larger-run validation.
+10. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
 
 ## 阶段化执行计划
 
@@ -172,10 +174,10 @@ isProject: false
 - **范围限制**：不改编译器；不修改 simulator 接口。
 - **对应 task**：`eval-tooling`.
 
-### Stage 7 — Compiler robustness backlog（partially completed）
-- **范围**：robust GEMM matcher（已完成 A/B lhs/rhs 识别、`IRMapping` cloned-read lookup 和 >2 loads 容忍）；reduction matcher 已泛化到多 load 共享 loop IV；`DmaOpsToLLVM` MMIO base pass option 与 `useXspmInsn` 开关已完成。剩余 bail-out cleanup/verification。
-- **交付物**：已提交 GEMM A/B matcher、cloned-read lookup、extra-load coverage、reduction multi-load matcher、DMA lowering options 和对应 lit/pytest。剩余分子项继续保持最小 patch + 对应 lit 测试。
-- **验证**：已通过 `dma-ops-to-llvm.mlir`、`convert-memory-to-spm.mlir`、`python/test/unit/cpu/test_dma.py`、`make verify-matmul verify-layer_norm`；multi-load matcher 另由 `make cmp-layer_norm` 做 gem5 功能覆盖。
+### Stage 7 — Compiler robustness backlog（completed 2026-05-01）
+- **范围**：robust GEMM matcher（A/B lhs/rhs 识别、`IRMapping` cloned-read lookup 和 >2 loads 容忍）；reduction matcher 泛化到多 load 共享 loop IV；`DmaOpsToLLVM` MMIO base pass option 与 `useXspmInsn` 开关；GEMM/reduction bail-out cleanup/verification。
+- **交付物**：已提交 GEMM A/B matcher、cloned-read lookup、extra-load coverage、reduction multi-load matcher、DMA lowering options、bail-out cleanup 和对应 lit/pytest。bail-out cleanup 确保动态 step / 部分 prologue 地址计算失败时不会留下 speculative DMA。
+- **验证**：已通过 `dma-ops-to-llvm.mlir`、`convert-memory-to-spm.mlir`、`python/test/unit/cpu/test_dma.py`、`make verify-matmul verify-layer_norm`；multi-load matcher 另由 `make cmp-layer_norm` 做 gem5 功能覆盖。`convert-memory-to-spm.mlir` 现在覆盖 GEMM/reduction dynamic-step no-DMA 和 GEMM partial-prologue cleanup。
 - **范围限制**：不动 placement pass、不动 SPM lowering 主体。
 - **对应 task**：`compiler-robustness-backlog`。
 
@@ -199,4 +201,4 @@ isProject: false
 - [`../archive/matmul-spm-lowering-closure.md`](../archive/matmul-spm-lowering-closure.md): matmul P3 closure and measured result log.
 - [`three-tier-placement.md`](three-tier-placement.md): 三层 placement 的设计与 MVP 里程碑。
 - [`../evidence/l2_warming.md`](../evidence/l2_warming.md): Tier 2 论文 claim 的实验结果。
-- [`phase3-compiler-backlog.md`](phase3-compiler-backlog.md): Phase 3 审计与剩余 compiler robustness 事项。
+- [`phase3-compiler-backlog.md`](phase3-compiler-backlog.md): Phase 3 审计与 compiler robustness 闭环记录。

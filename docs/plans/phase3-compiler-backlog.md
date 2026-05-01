@@ -4,7 +4,7 @@
 
 ---
 
-## A. What is in place (works as plumbing, but see §C)
+## A. What is in place
 
 The skeleton of Phase 3 is wired end-to-end:
 
@@ -27,7 +27,8 @@ The skeleton of Phase 3 is wired end-to-end:
   - `compiler/test/TritonCPU/spm-address-space.mlir` (lit, pins `memref<…, 3>` → `!llvm.ptr<3>` contract).
   - `compiler/python/test/unit/cpu/test_dma.py` (DMA dialect parsing + lowering).
 
-These are the only Phase-3 deliverables that should be considered "done".
+These were the initially audited plumbing deliverables. The current Phase 3
+compiler-robustness closure status is tracked in §E.
 
 Clarification on reduction coverage: there is no standalone `reduction`
 workload. Reduction lowering is the `transformReductionLoop` branch inside
@@ -42,8 +43,9 @@ exercises P1 #11's multi-load matcher with `x`, `gamma`, and `beta`.
 ## B. Audit Findings And Remaining Work
 
 This section preserves the original audit findings, but the final status is
-tracked in §E. Several items that were blockers in the first audit are now
-resolved; only the explicitly open P1 / deferred items remain active backlog.
+tracked in §E. All P0/P1/P2 compiler-robustness items for the current Phase 3
+coverage are now resolved; only explicitly deferred Phase 4+ items remain
+active backlog.
 
 ### 3a. GEMM double-buffering — **mostly resolved** (P0 #1, #3, #5; writeback deferred to Phase 4b)
 
@@ -115,7 +117,7 @@ Fix: add a compile-time assert (or emit a runtime guard that skips the SPM path)
   pattern.
 - ~~**Non-overlapping prefetch (§B.3a above)**~~ — resolved for GEMM; keep
   watching this shape if `transformGemmLoop` is refactored.
-- **Unused `TiledLoadInfo::feedsDot` for non-dot loads** is fine, but the early `return false` cases in `transformGemmLoop` leave the IR partially mutated — verify that the prologue DMAs are not emitted before the bail-out (currently they are; `:328-332` runs before the failure path on lines `:411`/`:325`).
+- ~~**Unused `TiledLoadInfo::feedsDot` for non-dot loads** is fine, but the early `return false` cases in `transformGemmLoop` left the IR partially mutated.~~ Resolved by the bail-out cleanup pass. `InsertedBeforeGuard` now removes speculative work on failure, and lit coverage verifies dynamic-step no-DMA plus partial-prologue cleanup cases.
 
 ### 2. `SplitLargeContract` (new pass)
 
@@ -181,21 +183,23 @@ B_back=+0xC00 for the 64x64 / 16x16 matmul smoke case.
 
 > ✅ `matmul/kernel.py` rewritten to `tl.make_block_ptr`; LLIR now contains `addrspace(3)` loads and `fence iorw` DMA sequences. See §E P0 #1.
 
-The description below reflects the state at initial audit time.
+The description below is a historical initial-audit note. Current production
+coverage is resolved: `matmul` and `layer_norm` now use block-pointer forms
+where needed, and verification checks generated LLIR for SPM markers.
 
 ```bash
 $ rg 'addrspace\(3\)|fence iorw|store volatile' workloads/*/build/*.llir
 # (no matches in matmul.llir or layer_norm.llir)
 ```
 
-Root cause: `workloads/matmul/kernel.py` and `workloads/layer_norm/kernel.py` use **pointer arithmetic** (`a_ptrs += BLOCK_SIZE_K`), not `tl.make_block_ptr`. In `compiler/third_party/cpu/lib/TritonToTritonCPU/ConvertMemoryOps.cpp`, only the `triton::isTensorPointerType(ptr)` branch produces the canonical `vector.transfer_read %memref[%idx]` form (`:179-209`). The pointer-arithmetic branch falls into `lowerToContiguousRowMajor` / `lowerToScalarLoads`, which emit gather-style or scalar loads — those do not match `findTiledLoads` in `ConvertMemoryToSPM.cpp`.
+Initial root cause: `workloads/matmul/kernel.py` and `workloads/layer_norm/kernel.py` used **pointer arithmetic** (`a_ptrs += BLOCK_SIZE_K`), not `tl.make_block_ptr`. In `compiler/third_party/cpu/lib/TritonToTritonCPU/ConvertMemoryOps.cpp`, only the `triton::isTensorPointerType(ptr)` branch produces the canonical `vector.transfer_read %memref[%idx]` form (`:179-209`). The pointer-arithmetic branch fell into `lowerToContiguousRowMajor` / `lowerToScalarLoads`, which emitted gather-style or scalar loads — those did not match `findTiledLoads` in `ConvertMemoryToSPM.cpp`.
 
 Two ways forward:
 
 1. Rewrite the workloads to use `tl.make_block_ptr` + `tt.advance` (smallest delta to the compiler).
 2. Teach `ConvertMemoryToSPM` to recognise the contiguous-row-major form as well (broader, but harder).
 
-Either way, **until this is fixed nothing in Phase 3 is actually exercised in production** — the unit tests pass on hand-written IR, but the production pipeline is a no-op.
+At that point, **until this was fixed nothing in Phase 3 was actually exercised in production** — the unit tests passed on hand-written IR, but the production pipeline was a no-op. This is now fixed for the current `matmul` and `layer_norm` coverage.
 
 ---
 

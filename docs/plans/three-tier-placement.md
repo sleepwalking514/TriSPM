@@ -44,8 +44,10 @@
 
 ### 关于 write-back
 - Tier 1 input：用完即弃，无写回。
-- Tier 1 output：DRAM 分配 + SPM accumulate + 收尾 DMA 写回。
-- Tier 2 / 3 output：通过 `ConvertMemoryToSPM` 的 SPM→DRAM 写回（当前已有路径，写回到 tensor 原分配地址）。
+- Tier 1 output：DRAM 分配 + SPM accumulate + 收尾 DMA 写回，属于 Phase 4b。
+- Tier 2 / 3 output：当前 Phase 3 路径仍通过 cacheable `vector.transfer_write`
+  写回原 tensor 地址；SPM→DRAM output-tile DMA writeback 还未实现，统一
+  放在 Phase 4b 追踪。
 
 ---
 

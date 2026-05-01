@@ -8,9 +8,9 @@ This directory is the navigation layer for the TriSPM project notes. It should a
 
 ## Current Position
 
-As of 2026-05-01, Phase 3 matmul is closed under the cold-start headline metric. The large 1024x1024x1024 / 32x32x32 run beats cache by 25.1% (SPM 288,976,339 cycles vs cache 386,049,495), while the 64x64 smoke case stays within the <= cache x 1.05 guardrail.
+As of 2026-05-01, Phase 3 matmul is closed under the cold-start headline metric. SPM already beats cache on the large cold-start headline point (1024x1024x1024 / 32x32x32: 288,976,339 vs 386,049,495 cycles, -25.1%), while the 64x64 smoke case stays inside the <= cache x 1.05 guardrail.
 
-The current active line is compiler robustness after reduction coverage: `layer_norm` now exercises mean, variance, and final normalize through SPM, including the multi-load reduction/streaming matcher. The remaining P1 compiler item is bail-out cleanup/verification before moving deeper into graph-level placement, Tier 1, reuse rules, and Phase 4 workloads.
+The Phase 3 compiler robustness line is now closed for the current workload set: `layer_norm` exercises mean, variance, and final normalize through SPM, including the multi-load reduction/streaming matcher, and GEMM/reduction bail-out cleanup is implemented and covered by lit tests. The active next line is graph-level placement and Phase 4/6 expansion: conservative tensor-edge placement, Tier 1 only when a workload needs resident hot state, DMA reuse tuning, broader workloads, and evaluation.
 
 For end-to-end transformer work, the placement rule is now conservative and graph-aware: keep intermediate activations and kernel outputs cacheable by default, use Tier 3 uncacheable only for external read-only DMA-only streaming inputs/weights, and reserve Tier 1 for future small SPM-resident hot state. See `plans/three-tier-placement.md` §2.1.
 
@@ -20,9 +20,9 @@ For end-to-end transformer work, the placement rule is now conservative and grap
 | --- | --- | --- |
 | Current | [`plans/phase3.md`](plans/phase3.md) | Phase 3 status page: what is done, what is current, and what is explicitly out of scope. Start here for the live compiler state. |
 | Current | [`plans/phase3-execution-timeline.md`](plans/phase3-execution-timeline.md) | Ordered execution timeline for Phase 3. Shows completed stages, current stage, and next stages. |
-| Current | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) | Remaining compiler robustness backlog: bail-out cleanup/verification and deferred writeback traceability. |
+| Current | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) | Phase 3 compiler audit/closure record: GEMM/reduction robustness is done for the current coverage; output-tile SPM writeback is deferred to Phase 4b. |
 | Current | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) | Three-tier placement design and MVP state: Tier 2/3 plumbing landed; graph-level conservative placement for transformer pipelines is now P0. |
-| Current | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | Active follow-on plan for fused micro-scheduler DMA reuse after SplitLargeContract exposed repeated B/A DMA costs. |
+| Current | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | Follow-on fused micro-scheduler DMA reuse plan and first correctness implementation after SplitLargeContract exposed repeated B/A DMA costs. |
 | Roadmap | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) | Full Phase 1-6 compiler roadmap: foundation, Phase 3, attention/multi-kernel work, end-to-end inference, and evaluation. |
 | Evidence | [`evidence/l2_warming.md`](evidence/l2_warming.md) | Completed Tier 2 L2-warming evidence: source verification plus `dma_l2_warming` microbenchmark, 4K-32K sweep, and 2.8x speedup result. |
 | Architecture | [`architecture/simulator-spm-architecture.md`](architecture/simulator-spm-architecture.md) | Simulator-side SPM/DMA/Xspm/O3-LSQ architecture map, code entry points, and paper-facing design notes. |
@@ -40,9 +40,9 @@ For end-to-end transformer work, the placement rule is now conservative and grap
 | Past | Done | [`archive/split-large-contract.md`](archive/split-large-contract.md) | Large-tile register pressure fixed; follow-on DMA reuse moves to [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md). |
 | Past | Done | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) M1-M8 | Tier 2/3 placement plumbing landed; `matmul` and `layer_norm` currently enter the SPM path, while `vector_add` is intentionally empty. |
 | Past | Done | [`evidence/l2_warming.md`](evidence/l2_warming.md) | Tier 2 L2-warming claim has source-level and microbenchmark evidence. |
-| Current | In progress | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) P1 | Bail-out cleanup/verification after GEMM extra-load and reduction multi-load matcher coverage landed. |
-| Next | High priority | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level transformer placement: cacheable activation backbone, selective UC streaming inputs, and future SPM-resident hot state. |
-| Next | Planned | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | Replace repeated full-tile DMA after SplitLargeContract with a fused microM-aware scheduler. |
+| Past | Done | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) P1 | GEMM extra-load matching, reduction multi-load matching, DMA lowering options, and GEMM/reduction bail-out cleanup are complete for the current coverage. |
+| Current | High priority | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level transformer placement: cacheable activation backbone, selective UC streaming inputs, and future SPM-resident hot state. |
+| Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |
 
