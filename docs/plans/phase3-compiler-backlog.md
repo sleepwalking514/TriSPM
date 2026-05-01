@@ -29,6 +29,14 @@ The skeleton of Phase 3 is wired end-to-end:
 
 These are the only Phase-3 deliverables that should be considered "done".
 
+Clarification on reduction coverage: there is no standalone `reduction`
+workload. Reduction lowering is the `transformReductionLoop` branch inside
+`ConvertMemoryToSPM`. It is structurally tested in
+`convert-memory-to-spm.mlir`, and its current production workload coverage is
+`layer_norm`: the mean and variance loops now use block pointers and hit the
+single-load reduction pattern. The final LayerNorm normalize loop remains a
+multi-load case and is still covered by P1 #11.
+
 ---
 
 ## B. Audit Findings And Remaining Work
@@ -59,7 +67,7 @@ resolved; only the explicitly open P1 / deferred items remain active backlog.
 
 ### 3c. Three-tier data-placement policy — **MVP landed** (see `three-tier-placement.md` M1-M8; coverage audited 2026-04-29)
 
-> ✅ Tier 2/3 MVP plumbing implemented via `three-tier-placement.md` M1-M8: `SPMSpaceManager`、`SPMTensorPlacement` pass、JSON sidecar、launcher `_alloc/_free_all`、harness 改造。覆盖审计完成：`matmul` 正常命中 Tier 3；`vector_add` 空 JSON 是设计预期（无循环）；`layer_norm` 需 kernel 改写 + matcher 泛化。详见 `three-tier-placement.md` §4.1。
+> ✅ Tier 2/3 MVP plumbing implemented via `three-tier-placement.md` M1-M8: `SPMSpaceManager`、`SPMTensorPlacement` pass、JSON sidecar、launcher `_alloc/_free_all`、harness 改造。当前覆盖：`matmul` 正常命中 Tier 3；`vector_add` 空 JSON 是设计预期（无循环）；`layer_norm` 的 mean/variance reduction pass 命中 Tier 3，final normalize loop 仍需 multi-load matcher。详见 `three-tier-placement.md` §4.1。
 
 The table below reflects the state after the 2026-04-29 audit; see `three-tier-placement.md` for full details.
 
@@ -143,12 +151,19 @@ B_back=+0xC00 for the 64x64 / 16x16 matmul smoke case.
 ### 6. End-to-end pipeline integration
 
 - `compiler.py:216-221` inserts the SPM pass and `:303` lowers the DMA ops. Both gated on `_AOT_MODE`. Good.
-- `matmul` now exercises the pass in production. `vector_add` remains a
-  designed no-op, and `layer_norm` needs the reduction matcher work in §E.
+- `matmul` now exercises the GEMM branch in production. `layer_norm` now
+  exercises the single-load reduction branch in production through the
+  mean/variance loops. `vector_add` remains a designed no-op. The remaining
+  `layer_norm` work in §E is specifically the final normalize loop with three
+  loads (`x`, `gamma`, `beta`), not the mean/variance reduction path.
 
 ### 7. Tests
 
 - `convert-memory-to-spm.mlir` exercises the pass on synthetic IR that already contains `vector.transfer_read` from `memref` (i.e. the post-`ConvertMemoryOps` form). It does **not** prove that anything from a Triton kernel actually reaches that form. The lit test passing tells us the pattern matches; it does **not** tell us the pattern fires in production.
+- Production firing is checked separately by workload verification. For
+  reduction, `make verify-layer_norm` confirms `addrspace(3)` and
+  `fence iorw` in generated LLIR for the mean/variance reduction path, while
+  `make cmp-layer_norm` checks gem5 functional correctness.
 
 ---
 

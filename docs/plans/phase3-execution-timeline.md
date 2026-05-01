@@ -1,6 +1,6 @@
 ---
 name: TriSPM Phase 3 Execution Timeline
-overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛；Tier sidecar、L2-warming、评测工具化和 reduction 2-D 地址修复均已完成。当前主线是 reduction 双缓冲流水，随后进入 compiler robustness backlog。
+overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复和 single-load reduction 双缓冲均已完成。当前剩余 compiler 主线是 reduction matcher 多 load 泛化。
 tasks:
   - id: p3-profile-overlap
     content: 画清 matmul prefetch enqueue、current buffer 读取、下一轮 dma_wait 成功之间的时间线，确认是否存在真实 overlap。
@@ -29,7 +29,7 @@ tasks:
   - id: tier-sidecar-verify
     content: 解释 `three-tier-placement.md` 与当前生成物的状态冲突：重新 build 三个 workload，核对 `_tiers.json` 和 launcher 分配路径；同时回溯 M8 验证时的实际输出，确认当时是否真的通过还是验证标准过宽。空 JSON 需定位是 pass 未跑、matcher 未命中还是无候选 tensor。
     status: completed
-    note: 2026-04-29 审计完成。matmul 正常（args 0,1 → Tier 3）；vector_add 空 JSON 是设计预期（单 block 无循环，无 tile reuse）；layer_norm 空 JSON 因 pointer arithmetic + reduction matcher 只接受 1 个 load。详见 `three-tier-placement.md` §4.1。
+    note: 2026-04-29 审计完成。matmul 正常（args 0,1 → Tier 3）；vector_add 空 JSON 是设计预期（单 block 无循环，无 tile reuse）。后续已把 layer_norm 的 mean/variance reduction pass 改成 block pointer，当前 layer_norm args 0 → Tier 3，作为 reduction-path coverage workload；final normalize loop 仍需 multi-load matcher。详见 `three-tier-placement.md` §4.1。
   - id: reduction-single-buffer-pipeline
     priority: high
     content: 升级 `transformReductionLoop` 单缓冲 prefetch 为真双缓冲（layer_norm/softmax/未来 reduction kernel），让 DMA 与 CPU 计算真正流水起来；当前实现是 read-then-prefetch 串行，DMA 延迟完全暴露在关键路径上。
@@ -48,7 +48,7 @@ tasks:
     status: completed
     note: 2026-04-30 修复。根因：prefetch 地址计算始终使用 strides[0]（leading stride），但 IV 可能索引非 leading 维度。修复为动态查找 IV 所索引维度的 stride。新增 lit 测试 `@reduction_2d_non_leading_iv`（memref<8x64xf32> IV 在 dim 1）验证 byte offset 使用 stride=1*4=4 而非 64*4=256。
   - id: compiler-robustness-backlog
-    content: "P3 收敛后补 robust GEMM matcher：(a) indexing maps 推导 A/B 与 K 维；(b) `getLoc()` 查找 cloned read 改为 `IRMapping`-based lookup（`phase3-compiler-backlog.md` §C.1.2）；(c) 允许 >2 loads 只要恰好两个 feed contract（`phase3-compiler-backlog.md` §C.1.3）；(d) 修复 bail-out 路径 prologue DMA 残留（`phase3-compiler-backlog.md` §C.1.5）。另补 reduction matcher 泛化到多 load 共享 loop IV，以及 `DmaOpsToLLVM` 的 MMIO base/useXspmInsn 选项。"
+    content: "P3 收敛后补 compiler robustness：robust GEMM matcher 已完成 A/B lhs/rhs 识别与 `IRMapping` cloned-read lookup；`DmaOpsToLLVM` 已增加 MMIO base/useXspmInsn 选项。剩余：(a) GEMM 允许 >2 loads 只要恰好两个 feed contract；(b) reduction matcher 泛化到多 load 共享 loop IV；(c) 修复/验证 bail-out 路径 prologue DMA 残留。"
     status: pending
   - id: tier1-backlog
     content: 在 P3 和 Tier 2 证据链稳定后，规划 `three-tier-placement.md` §6.1 的 Tier 1 resident SPM 完整实现。
@@ -67,14 +67,14 @@ isProject: false
 
 ## 当前判断
 - Phase 1 / Phase 2 基础完成，Phase 3 的 GEMM SPM lowering 已能在 `matmul` 产出真实 DMA/SPM 代码。
-- `phase3.md` 已更新为当前状态页：记录 P1/P2 plumbing 与 matmul P3 cold-start headline 已完成；当前 blocker 是 reduction 路径性能。
+- `phase3.md` 已更新为当前状态页：记录 P1/P2 plumbing、matmul P3 cold-start headline、single-load reduction 双缓冲与 layer_norm coverage baseline。
 - `../archive/matmul-spm-lowering-closure.md` 的 P0-P2 已完成：matmul 汇编形态已修复，`vfmacc.vf=256`、`vrgather=0`、spill/reload 与 cache baseline 对齐。
 - `SplitLargeContract` pass 已实现并验证：256×256×256 / 32×32×32 tile 下 SPM 比 cache 快 32.1%（3,777,998 vs 5,560,678 cycles）。通过 DMA 再灌注（re-priming）解决了多 micro-loop 的正确性问题。
 - P3 已通过 Stage 2.5（fair cold-cache baseline）+ Stage 3（MMIO packing + 移除 prologue wait）+ Stage 2.6（size/steady sweep）收敛：64×64 cold-start smoke 仅慢 +3.7%（38,361 vs 37,004 cycles），大尺寸 cold-start 1024×1024×1024 / 32×32×32 已反超 cache（288,976,339 vs 386,049,495 cycles，-25.1%）。P3 headline 采用 cold-start 口径；steady-state warm-cache 仅作辅助参考，不作为关键对象。
-- `three-tier-placement.md` 的 MVP 代码框架基本落地。覆盖审计（2026-04-29）确认：`matmul` 正常命中 Tier 3（args 0,1）；`vector_add` 空 JSON 是设计预期（单 block 无循环）；`layer_norm` 空 JSON 因 pointer arithmetic + reduction matcher 只接受 1 个 load。详见 `three-tier-placement.md` §4.1。
-- 文档中"三个 workload 全部命中 Tier 3"的说法已修正。`verify-spm-fires` 工具已落地：`matmul` 通过 `make verify-matmul`；`vector_add` / `layer_norm` 预期未命中 SPM（见 `three-tier-placement.md` §4.1）。
+- `three-tier-placement.md` 的 MVP 代码框架基本落地。当前覆盖：`matmul` 正常命中 Tier 3（args 0,1）；`vector_add` 空 JSON 是设计预期（单 block 无循环）；`layer_norm` 在 mean/variance reduction pass 命中 Tier 3（arg 0），final normalize loop 仍需 multi-load matcher。详见 `three-tier-placement.md` §4.1。
+- 文档中"三个 workload 全部命中 Tier 3"的说法已修正。`verify-spm-fires` 工具已落地：`matmul` 与 `layer_norm` 通过 `make verify-<kernel>`；`vector_add` 预期未命中 SPM（见 `three-tier-placement.md` §4.1）。
 - `../evidence/l2_warming.md` Tier 2 L2-warming 验证完成（源码分析 + 微基准 2.8× 加速数据）。
-- `phase3-compiler-backlog.md` 里的 P1 稳健性事项仍未完全消失：robust GEMM matcher、reduction matcher 泛化、`DmaOpsToLLVM` 的 MMIO base/useXspmInsn 选项都不是当前 P3 blocker，但会影响后续 workload 扩展和 Phase 4d。
+- `phase3-compiler-backlog.md` 里的 P1 稳健性事项仍未完全消失：GEMM >2 loads、reduction matcher 泛化和 bail-out 清理仍会影响后续 workload 扩展。`DmaOpsToLLVM` 的 MMIO base/useXspmInsn 选项已完成。
 - `three-tier-placement.md` §6 是明确 backlog：§6.3 的验证补完已由工具化和 L2-warming evidence 覆盖；§6.1 Tier 1 和 §6.2 reuse 规则扩展应排在 reduction 性能和 Tier 2 数据闭环之后。
 
 ## Timeline Reading Order
@@ -84,12 +84,12 @@ isProject: false
 > **可并行**：Tier sidecar 核查、L2-warming microbenchmark、评测工具化和 reduction 正确性修复互不完全依赖，可按资源并行推进。
 
 1. Done: treat matmul P3 as closed under the cold-start headline metric. Keep `p3-prefetch-timing` only as a future small-size optimization lever.
-2. Done: resolve Tier sidecar coverage mismatch. `matmul` hits Tier 3; `vector_add` is intentionally empty; `layer_norm` needs kernel/matcher work.
+2. Done: resolve Tier sidecar coverage mismatch. `matmul` hits Tier 3; `vector_add` is intentionally empty; `layer_norm` now hits Tier 3 for mean/variance reduction and still needs multi-load matcher work for final normalize.
 3. Done: complete Tier 2 / L2-warming evidence via `../evidence/l2_warming.md`.
 4. Done: complete the Phase 3 tooling baseline: `make verify`, unified `make run-<kernel>` / `make cmp-<kernel>`, and stats CSV export. Remaining Phase 6 comparison tooling moves to the roadmap.
 5. Done: fix the `transformReductionLoop` 2-D non-leading-IV prefetch address bug.
 6. Done: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) and record the first `layer_norm` SPM coverage/perf baseline.
-7. Current: clean up `phase3-compiler-backlog.md` P1 robustness work: robust GEMM matcher, generalized reduction matcher, and `DmaOpsToLLVM` options.
+7. Current: finish remaining `phase3-compiler-backlog.md` P1 robustness work: generalized reduction matcher, GEMM >2-load tolerance, and bail-out cleanup/verification.
 8. Later: after Tier 2 evidence and reduction performance stabilize, enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.2 for workload-driven scalar-reuse rule expansion.
 
 ## 阶段化执行计划
@@ -104,7 +104,7 @@ isProject: false
 - **对应 task**：`p3-profile-overlap`、`p3-wait-semantics`（诊断部分）。
 
 ### Stage 2 — Tier sidecar 覆盖审计（completed 2026-04-29）
-- **结论**：matmul 正常（args 0,1 → Tier 3）；vector_add 空 JSON 是设计预期（单 block 无循环）；layer_norm 空 JSON 因 pointer arithmetic + reduction matcher 只接受 1 个 load。详见 `three-tier-placement.md` §4.1。
+- **结论**：matmul 正常（args 0,1 → Tier 3）；vector_add 空 JSON 是设计预期（单 block 无循环）。该审计时 layer_norm 还因 pointer arithmetic 未命中；后续已把 mean/variance reduction pass 改为 block pointer，当前 layer_norm args 0 → Tier 3，final normalize loop 仍需 multi-load matcher。详见 `three-tier-placement.md` §4.1。
 - **交付物**：`three-tier-placement.md` §4.1 覆盖审计表 + `make verify` / `make verify-<kernel>` 工具。
 - **对应 task**：`tier-sidecar-verify`（completed）。
 
@@ -168,10 +168,10 @@ isProject: false
 - **范围限制**：不改编译器；不修改 simulator 接口。
 - **对应 task**：`eval-tooling`.
 
-### Stage 7 — Compiler robustness backlog（planned）
-- **范围**：robust GEMM matcher（indexing maps 推导 A/B 与 K 维、`getLoc()` 改 `IRMapping`、允许 >2 loads 只要恰好两个 feed contract、修复 bail-out prologue DMA 残留）；reduction matcher 泛化到多 load 共享 loop IV；`DmaOpsToLLVM` 增加 MMIO base pass option 与 `useXspmInsn` 开关。
-- **交付物**：分子项的最小 patch + 对应 lit 测试。每个 matcher 子项独立 commit，便于回滚。
-- **验证**：lit 测试覆盖每个新分支；`matmul` / `layer_norm` / `vector_add` SPM 与 cache 路径全部 PASS。
+### Stage 7 — Compiler robustness backlog（partially completed）
+- **范围**：robust GEMM matcher（已完成 A/B lhs/rhs 识别和 `IRMapping` cloned-read lookup；仍剩 >2 loads 容忍和 bail-out cleanup/verification）；reduction matcher 泛化到多 load 共享 loop IV；`DmaOpsToLLVM` MMIO base pass option 与 `useXspmInsn` 开关已完成。
+- **交付物**：已提交 GEMM A/B matcher、cloned-read lookup、DMA lowering options 和对应 lit/pytest。剩余分子项继续保持最小 patch + 对应 lit 测试。
+- **验证**：已通过 `dma-ops-to-llvm.mlir`、`convert-memory-to-spm.mlir`、`python/test/unit/cpu/test_dma.py`、`make verify-matmul verify-layer_norm`。后续 multi-load matcher 需要增加新的 lit 和 workload coverage。
 - **范围限制**：不动 placement pass、不动 SPM lowering 主体。
 - **对应 task**：`compiler-robustness-backlog`。
 

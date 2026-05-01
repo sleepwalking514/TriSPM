@@ -34,6 +34,10 @@ automatically:
   workload, `vector_add` is intentionally not transformed, and `layer_norm`
   now enters the SPM path for its single-load mean/variance reduction passes.
   Its final normalize pass still needs multi-load reduction matcher work.
+- Reduction support is not a standalone workload. It is the
+  `transformReductionLoop` branch of `ConvertMemoryToSPM`; `layer_norm` is
+  the production workload currently used to exercise it, while
+  `convert-memory-to-spm.mlir` provides the synthetic structural lit coverage.
 - Tier 2 L2-warming has been verified by the `dma_l2_warming`
   microbenchmark; the 4K-32K working-set sweep confirms near-100% L2 hits
   after DMA and about 2.8x speedup over the cold scalar-read phase.
@@ -93,6 +97,8 @@ The MVP framework is landed. Coverage audit (2026-04-29, `make verify`) confirme
 - `layer_norm`: args 0 -> Tier 3 after rewriting the mean/variance
   reduction passes to block pointers with constexpr `N`. LLIR has 32
   `addrspace(3)` + 68 `fence iorw`; gem5 compare passes functionally.
+  This verifies the production use of `transformReductionLoop` for the two
+  single-load reduction loops; there is no separate `reduction` workload.
   Remaining: the final normalize loop still has 3 loads (x, gamma, beta)
   and needs reduction matcher generalization.
 
@@ -114,10 +120,11 @@ See `three-tier-placement.md` §4.1 for full analysis.
    Baseline 32x64 result: SPM 656,898 cycles vs cache 121,284 cycles,
    512 DMA transfers / 16,384 bytes, waitFraction 0.0398. This is a
    correctness/coverage baseline, not a performance win.
-5. Clean up compiler robustness:
-   derive GEMM A/B identity and K dimension from `vector.contract` indexing
-   maps, generalize reduction matching to multiple loads sharing the loop IV,
-   and add `DmaOpsToLLVM` options for MMIO base and future `useXspmInsn`.
+5. Continue compiler robustness:
+   GEMM A/B identity and cloned-read lookup have been hardened, and
+   `DmaOpsToLLVM` now has MMIO base / future `useXspmInsn` options. The
+   active remaining compiler item is reduction matching for multiple loads
+   sharing the loop IV.
 
 ## Configuration Notes
 

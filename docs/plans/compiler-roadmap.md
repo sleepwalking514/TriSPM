@@ -37,7 +37,7 @@ Input tensor (seq_len × d_model)
 
 **SPM-relevant kernel categories:**
 1. **Matmul (GEMM)** — double-buffered A/B tiles in K-loop (highest SPM benefit)
-2. **Reduction (LayerNorm, Softmax)** — single-buffer DMA prefetch along reduction axis
+2. **Reduction (LayerNorm, Softmax)** — double-buffered DMA prefetch along reduction axis for single-load tiled reductions
 3. **Attention** — multi-tensor SPM allocation for Q/K/V/O tiles, nested loops
 4. **Elementwise (ReLU, residual add)** — streaming prefetch or leave in cache (low reuse)
 
@@ -200,10 +200,28 @@ scf.for %k iter_args(%buf_idx=0, %acc, %dram_a_addr, %dram_b_addr) {
 
 ### 3b. Reduction kernels (LayerNorm, Softmax)
 
-Simpler pattern than GEMM — single-buffer DMA prefetch along the reduction axis:
-- No double-buffering needed (single pass over data, low reuse)
-- DMA prefetches the next chunk while the current chunk is being reduced
-- SPM allocation: one or two tile buffers (input + partial result)
+Reduction is handled by the existing `ConvertMemoryToSPM` compiler pass, not
+by a standalone workload-specific pass. The reduction branch is
+`transformReductionLoop` in
+`compiler/third_party/cpu/lib/TritonCPUTransforms/ConvertMemoryToSPM.cpp`.
+
+Current status:
+- Single-load tiled reductions are double-buffered: prologue DMA fills the
+  first SPM buffer, the loop waits at the body top, reads the current SPM
+  buffer, enqueues the next tile into the alternate buffer, and flips the
+  buffer index.
+- Structural coverage is in
+  `compiler/test/TritonCPU/convert-memory-to-spm.mlir`, including the
+  reduction body-top wait, buffer select, alternate-buffer enqueue, and
+  2-D non-leading-IV address case.
+- Production coverage uses `layer_norm`: its mean and variance passes were
+  rewritten to `tl.make_block_ptr` + `tl.advance`, so they lower into the
+  single-load `transformReductionLoop` pattern. `make verify-layer_norm`
+  checks for `addrspace(3)` / `fence iorw`, and `make cmp-layer_norm`
+  verifies functional correctness on gem5.
+- The final LayerNorm normalize loop still has three loads (`x`, `gamma`,
+  `beta`) and remains pending until the reduction matcher accepts multiple
+  loads sharing the loop IV.
 
 ### 3c. Data placement policy
 
@@ -524,15 +542,19 @@ The three-tier placement policy is the paper's most valuable insight. The Tier 2
 
 ### 6c. Expand Workload Coverage [P1]
 
-Currently only `matmul` meaningfully enters the SPM lowering path. `vector_add` is intentionally too trivial, and `layer_norm` still needs block-pointer form plus generalized reduction matching. Need at least 5 representative kernels:
+`matmul` is the mature GEMM workload. `layer_norm` now exercises the
+single-load reduction path through its mean/variance passes; it is the current
+production reduction coverage workload rather than a separate synthetic
+`reduction` workload. `vector_add` is intentionally too trivial for SPM
+tiling. Need at least 5 representative kernels:
 
 | Kernel | Type | SPM Pattern | Priority |
 |--------|------|-------------|----------|
 | matmul | GEMM | double-buffer ✅ | Done |
-| layer_norm | reduction | single-buffer once matcher fires | P1 — needs block pointers + generalized reduction matcher |
-| softmax | reduction | single-buffer | P1 — reuse reduction pattern |
+| layer_norm | reduction | double-buffer ✅ for mean/variance; final normalize still multi-load | Coverage done; P1 for multi-load matcher |
+| softmax | reduction | double-buffer once matcher fires | P1 — reuse reduction pattern after multi-load generalization |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
-| cross_entropy | reduction | single-buffer | P2 — diversify workload mix |
+| cross_entropy | reduction | double-buffer once matcher fires | P2 — diversify workload mix |
 
 ### 6d. Performance Breakdown Analysis [P1]
 
