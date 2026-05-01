@@ -37,6 +37,10 @@ workload. Reduction lowering is the `transformReductionLoop` branch inside
 `layer_norm`: the mean, variance, and final normalize loops now use block
 pointers and hit the reduction/streaming path. The final normalize loop
 exercises P1 #11's multi-load matcher with `x`, `gamma`, and `beta`.
+Current performance is bad: the latest `workloads/m5out/layer_norm/*/compare.txt`
+flushed runs show SPM far slower than cache even for larger layer_norm shapes,
+and noflush 32x64 is still slower. Treat reduction as functionally covered but
+performance-blocked.
 
 ---
 
@@ -246,11 +250,18 @@ At that point, **until this was fixed nothing in Phase 3 was actually exercised 
 
 13. **SPM writeback for output tile** (C tile in GEMM, O tile in attention). Currently the C tile goes through cacheable `vector.transfer_write`. *(Deferred to Phase 4b per plan — not a Phase 3 deliverable, listed here for traceability.)*
 
+14. **Transformer-facing workload coverage before Phase 4 attention.**
+    Add AOT harness/manifest/verify coverage for activation and residual/add
+    cache-path elementwise kernels, plus softmax or another reduction/streaming
+    kernel. Elementwise kernels should usually remain cache-only; this item is
+    about proving build/link/function/placement behavior before the full
+    transformer harness, not about adding an SPM pass for every op.
+
 ### P2 — Tooling / verification
 
-14. ~~**End-to-end smoke test**~~: ✅ Done. `make verify` / `make verify-<kernel>` builds both modes and checks LLIR for `addrspace(3)` + `fence iorw`, tier JSON non-empty, and launcher `_alloc/_free_all` presence.
-15. ~~**Cache-baseline harness path.**~~ ✅ Done. `make cmp-<kernel>` runs both SPM and cache modes; `make run-<kernel>` runs SPM only. Unified via `run_experiment.py`.
-16. ~~**Stats wiring**~~: ✅ Done. `compare_stats.py` extracts 21 symmetric + 15 SPM-only metrics into `.txt` tables and CSV (`--csv` / `--spm-only-csv`). Remaining: Phase 6 comparison tooling.
+15. ~~**End-to-end smoke test**~~: ✅ Done. `make verify` / `make verify-<kernel>` builds both modes and checks LLIR for `addrspace(3)` + `fence iorw`, tier JSON non-empty, and launcher `_alloc/_free_all` presence.
+16. ~~**Cache-baseline harness path.**~~ ✅ Done. `make cmp-<kernel>` runs both SPM and cache modes; `make run-<kernel>` runs SPM only. Unified via `run_experiment.py`.
+17. ~~**Stats wiring**~~: ✅ Done. `compare_stats.py` extracts 21 symmetric + 15 SPM-only metrics into `.txt` tables and CSV (`--csv` / `--spm-only-csv`). Remaining: Phase 6 comparison tooling.
 
 ---
 

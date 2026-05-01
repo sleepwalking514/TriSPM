@@ -50,12 +50,12 @@ automatically:
 
 ### Current State of P3
 
-`matmul` is functionally correct, has the right compute shape, and now has a
-closed cold-start P3 headline: the large 1024×1024×1024 / 32×32×32 run beats
-cache by 25.1% (SPM 288,976,339 cycles vs cache 386,049,495).  The 64×64
-smoke case remains within +3.7% under a fair cold-cache comparison, which is
-inside the ≤ cache × 1.05 regression guard.  This is the result of four
-landed pieces:
+`matmul` is functionally correct, has the right compute shape, and has crossed
+over under the cold-start P3 headline metric. SPM beats the cache baseline on
+the current large runs, and the small 64-case is no longer a regression point.
+Keep this page qualitative for now: the best SPM and cache blocking choices are
+not identical, so a fair final headline needs a blocking sweep rather than a
+single fixed number. This state is the result of four landed pieces:
 
 - **Stage 2.5 (harness, fair baseline)**: scrub L1+L2 before `m5_reset_stats`
   so SPM and cache both start with cold DRAM; init / reference run on
@@ -73,15 +73,14 @@ landed pieces:
   `DmaWait` already covers prologue DMAs on iteration 0, so the
   redundant prologue wait was removed from `transformGemmLoop`.
 - **Stage 2.6 (measurement, size/steady sweep)**: large cold-start data is
-  now available and is the P3 headline metric.  Steady-state warm-cache is
-  retained only as an auxiliary sensitivity point because repeated launches
-  mainly measure cache residency.
+  now available and shows crossover. Steady-state warm-cache is retained only
+  as an auxiliary sensitivity point because repeated launches mainly measure
+  cache residency.
 
-Small-case fair-baseline cycle count: SPM 38,361 vs cache 37,004 (+3.7%).
-Large cold-start headline: SPM 288,976,339 vs cache 386,049,495 (-25.1%).
-DMA stats on the 64×64 smoke case remain unchanged (128 transfers, 131,072
-bytes, 4,096 SPM reads, 0 bank conflicts).  See `../archive/matmul-spm-lowering-closure.md` §P3.0 /
-§P3.5 for the measured tables and interpretation.
+The archived measurement log still contains older concrete points, but do not
+use those as the current headline without rerunning a fair blocking sweep for
+both SPM and cache. See `../archive/matmul-spm-lowering-closure.md` §P3.0 /
+§P3.5 for the historical measured tables and interpretation.
 
 Stage 2.6 also produced steady-state warm-cache data.  Those runs are not
 the critical object for P3: cache keeps tiny repeated working sets resident,
@@ -112,6 +111,8 @@ The MVP framework is landed. Coverage audit (2026-04-29, `make verify`) confirme
   `fence iorw`; gem5 compare passes functionally.  This verifies production
   use of `transformReductionLoop` for the two single-load reductions and the
   final 3-load normalize loop; there is no separate `reduction` workload.
+  This is functional/coverage evidence only: current layer_norm comparisons
+  show the reduction path is still far slower than cache.
 
 See `three-tier-placement.md` §4.1 for full analysis.
 
@@ -128,16 +129,24 @@ See `three-tier-placement.md` §4.1 for full analysis.
    double-buffer pipelining after the 2-D address fix.~~ Done: the lit
    test now verifies body-top wait + buffer flip + alternate-buffer
    prefetch, and `make cmp-layer_norm` passes with real SPM markers.
-   Current 32x64 ROI result after final normalize also enters SPM: SPM
-   125,593 cycles vs cache 6,138 cycles, 1,280 DMA transfers / 40,960
-   bytes, waitFraction 0.4002. This is a
-   correctness/coverage baseline, not a performance win.
+   Current `workloads/m5out/layer_norm/*/compare.txt` results make the
+   performance caveat explicit: flushed 32x64, 512x1024, and 1024x1024 runs
+   are much slower than cache, and even the noflush 32x64 run remains slower.
+   Treat this as a reduction-performance blocker, not a speedup result.
 5. ~~Finish compiler robustness for current Phase 3 coverage:~~ Done.
    GEMM A/B identity, cloned-read lookup, extra-load tolerance, reduction
    multi-load matching, and `DmaOpsToLLVM` MMIO base / future `useXspmInsn`
    options are done. GEMM/reduction bail-out cleanup is also done; lit tests
    cover dynamic-step no-DMA cases and partial prologue cleanup.
-6. Before the transformer pipeline, implement graph-level conservative
+6. Before Phase 4 attention or the transformer pipeline, add transformer-facing
+   single-kernel coverage. At minimum this means harness/manifest/verify
+   coverage for cache-path elementwise kernels used by the block
+   (activation/GELU or SiLU and residual/add), plus at least one next
+   reduction/streaming shape such as softmax. These do not necessarily need
+   SPM transforms; the important thing is to prove that the pass leaves
+   low-reuse elementwise kernels on the cache path and that the workload
+   harness can stitch them into the later transformer driver.
+7. Before the transformer pipeline, implement graph-level conservative
    placement (`three-tier-placement.md` §2.1 / §6.2): cacheable activation
    backbone, selective uncacheable streaming inputs, and future Tier-1 hot
    state.
@@ -156,6 +165,10 @@ specific experiment intentionally overrides the environment.
 
 - Graph-level conservative placement is not needed for the single-kernel P3
   headline, but it is P0 for Phase 5 transformer evaluation.
+- Elementwise activation/residual kernels usually should not get an SPM pass
+  in isolation. They should have harness/verify coverage and normally remain
+  cache-path kernels unless fused into a neighboring matmul/reduction/attention
+  kernel.
 - Tier 1 resident SPM needs func arg addrspace(3), harness pre-launch DMA,
   and an SPM layout manifest. Keep it in `three-tier-placement.md` §6.1 until Tier 2
   evidence is stable.

@@ -8,9 +8,11 @@ This directory is the navigation layer for the TriSPM project notes. It should a
 
 ## Current Position
 
-As of 2026-05-01, Phase 3 matmul is closed under the cold-start headline metric. SPM already beats cache on the large cold-start headline point (1024x1024x1024 / 32x32x32: 288,976,339 vs 386,049,495 cycles, -25.1%), while the 64x64 smoke case stays inside the <= cache x 1.05 guardrail.
+As of 2026-05-02, Phase 3 matmul has crossed over under the cold-start headline metric: SPM beats the cache baseline on the current large runs, and the small 64-case is no longer a regression point. Do not quote a fixed headline number here yet; the best SPM and cache blocking choices differ, so the final fair comparison should come from a blocking sweep rather than a single stale point.
 
-The Phase 3 compiler robustness line is now closed for the current workload set: `layer_norm` exercises mean, variance, and final normalize through SPM, including the multi-load reduction/streaming matcher, and GEMM/reduction bail-out cleanup is implemented and covered by lit tests. The active next line is graph-level placement and Phase 4/6 expansion: conservative tensor-edge placement, Tier 1 only when a workload needs resident hot state, DMA reuse tuning, broader workloads, and evaluation.
+The Phase 3 compiler robustness line is closed for the current matmul/layer_norm/vector_add coverage: `layer_norm` exercises mean, variance, and final normalize through SPM, including the multi-load reduction/streaming matcher, and GEMM/reduction bail-out cleanup is implemented and covered by lit tests. Coverage is not yet enough to jump straight to Phase 4 attention: before that, add transformer-facing single-kernel/harness coverage for the cache-path elementwise pieces and the next reduction/streaming shapes, then use the transformer harness to decide which of those should stay cache-only.
+
+Important performance caveat: the reduction path is only a correctness/coverage win right now. Latest `workloads/m5out/layer_norm/*/compare.txt` runs show SPM layer_norm much slower than cache under flushed ROI comparisons, including large 512x1024 and 1024x1024 cases; record this as a reduction-performance blocker, not as a paper speedup result.
 
 For end-to-end transformer work, the placement rule is now conservative and graph-aware: keep intermediate activations and kernel outputs cacheable by default, use Tier 3 uncacheable only for external read-only DMA-only streaming inputs/weights, and reserve Tier 1 for future small SPM-resident hot state. See `plans/three-tier-placement.md` §2.1.
 
@@ -18,7 +20,7 @@ For end-to-end transformer work, the placement rule is now conservative and grap
 
 | Status | File | What it is for |
 | --- | --- | --- |
-| Current | [`plans/phase3.md`](plans/phase3.md) | Phase 3 status page: what is done, what is current, and what is explicitly out of scope. Start here for the live compiler state. |
+| Current | [`plans/phase3.md`](plans/phase3.md) | Phase 3 status page: what is done, what is current, what still blocks Phase 4, and what is explicitly out of scope. Start here for the live compiler state. |
 | Current | [`plans/phase3-execution-timeline.md`](plans/phase3-execution-timeline.md) | Ordered execution timeline for Phase 3. Shows completed stages, current stage, and next stages. |
 | Current | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) | Phase 3 compiler audit/closure record: GEMM/reduction robustness is done for the current coverage; output-tile SPM writeback is deferred to Phase 4b. |
 | Current | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) | Three-tier placement design and MVP state: Tier 2/3 plumbing landed; graph-level conservative placement for transformer pipelines is now P0. |
@@ -41,6 +43,7 @@ For end-to-end transformer work, the placement rule is now conservative and grap
 | Past | Done | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) M1-M8 | Tier 2/3 placement plumbing landed; `matmul` and `layer_norm` currently enter the SPM path, while `vector_add` is intentionally empty. |
 | Past | Done | [`evidence/l2_warming.md`](evidence/l2_warming.md) | Tier 2 L2-warming claim has source-level and microbenchmark evidence. |
 | Past | Done | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) P1 | GEMM extra-load matching, reduction multi-load matching, DMA lowering options, and GEMM/reduction bail-out cleanup are complete for the current coverage. |
+| Current | High priority | [`plans/phase3.md`](plans/phase3.md) + [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6c | Transformer-facing single-kernel coverage: add harnesses/verification for elementwise activation/residual/cache-path kernels, softmax or another reduction shape, and attention prerequisites before treating Phase 4 as unblocked. |
 | Current | High priority | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level transformer placement: cacheable activation backbone, selective UC streaming inputs, and future SPM-resident hot state. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |

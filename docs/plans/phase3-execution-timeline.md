@@ -1,6 +1,6 @@
 ---
 name: TriSPM Phase 3 Execution Timeline
-overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher 和 bail-out cleanup/verification 均已完成。当前主线转向 graph-level placement、fused DMA reuse tuning、Phase 4/6 workload 与评测扩展。
+overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛并已看到 SPM crossover，但最终 headline 需要 SPM/cache blocking sweep 后再定；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher 和 bail-out cleanup/verification 均已完成。当前主线是 Phase 4 前的 transformer-facing kernel/harness 覆盖、reduction 性能 blocker 记录、graph-level placement、fused DMA reuse tuning 和 Phase 6 评测扩展。
 tasks:
   - id: p3-profile-overlap
     content: 画清 matmul prefetch enqueue、current buffer 读取、下一轮 dma_wait 成功之间的时间线，确认是否存在真实 overlap。
@@ -17,7 +17,7 @@ tasks:
   - id: p3-reduce-wait-cost
     content: 若仍有明显差距，减少每次 DMA enqueue 的 MMIO store 数量（如合并 descriptor 写入）。
     status: completed
-    note: Stage 3 完成 MMIO descriptor packing：新增 REG_STRIDES_PACKED (0x38) + REG_LEN 上 32 位接收 HEIGHT。每个 DMA descriptor 从 6 stores 降到 4 stores。SPM kernel cycles 从 39,480 → 38,361 (-1,119 cy)，gap +6.7% → +3.7%。
+    note: Stage 3 完成 MMIO descriptor packing：新增 REG_STRIDES_PACKED (0x38) + REG_LEN 上 32 位接收 HEIGHT。每个 DMA descriptor 从 6 stores 降到 4 stores。旧 64-case 阶段数据曾明显收窄；当前 64-case 已不再作为回归点，最终 headline 等 blocking sweep 后再定。
   - id: p3-prefetch-timing
     content: 尝试在 iteration body 中更早发出 prefetch，让 DMA 有更多计算时间来隐藏延迟（与 MMIO 优化是独立方向）。
     status: pending
@@ -25,7 +25,7 @@ tasks:
   - id: steady-state-and-size-sweep
     content: harness 加 N-iter steady-state 测量模式 + 128×128/256×256 size sweep；补 `../archive/matmul-spm-lowering-closure.md` §P3.5 的 warm-cache 与大尺寸数据。
     status: completed
-    note: Stage 2.6 完成。统一 `make cmp-matmul` / `make sweep-matmul SWEEP=size` 入口已落地并补跑；steady-state warm-cache 不是 P3 headline 口径，只作为 cache residency 的辅助参考。当前可引用的大尺寸 cold-start 记录为 1024×1024×1024 / 32×32×32：SPM 288,976,339 cycles vs cache 386,049,495 cycles，SPM 快 25.1%。
+    note: Stage 2.6 完成。统一 `make cmp-matmul` / `make sweep-matmul SWEEP=size` 入口已落地并补跑；steady-state warm-cache 不是 P3 headline 口径，只作为 cache residency 的辅助参考。当前大尺寸 cold-start 已看到 SPM crossover，但不要在入口文档引用固定数字：SPM/cache 最优 blocking 不同，最终 headline 需要 fair blocking sweep 后再定。
   - id: tier-sidecar-verify
     content: 解释 `three-tier-placement.md` 与当前生成物的状态冲突：重新 build 三个 workload，核对 `_tiers.json` 和 launcher 分配路径；同时回溯 M8 验证时的实际输出，确认当时是否真的通过还是验证标准过宽。空 JSON 需定位是 pass 未跑、matcher 未命中还是无候选 tensor。
     status: completed
@@ -34,7 +34,7 @@ tasks:
     priority: high
     content: 升级 `transformReductionLoop` 单缓冲 prefetch 为真双缓冲（layer_norm/softmax/未来 reduction kernel），让 DMA 与 CPU 计算真正流水起来；当前实现是 read-then-prefetch 串行，DMA 延迟完全暴露在关键路径上。
     status: completed
-    note: 2026-04-30 完成 single-load 双缓冲；2026-05-01 multi-load matcher 覆盖 final normalize。`transformReductionLoop` 已拆成两个 SPM buffer，prologue 发首块 DMA，body 顶部 `dma_wait` 等当前 buffer，随后向 alternate buffer 发 next prefetch 并翻转 `buf_idx`。lit 测试覆盖 body-top wait / buffer select / alternate-buffer enqueue / 2-D non-leading-IV stride / multi-load shared-IV streams。`make verify-layer_norm` 通过（38 `addrspace(3)`，78 `fence iorw`，tier JSON `{\"0\":3,\"1\":3,\"2\":3}`），`make cmp-layer_norm` 功能 PASS。32x64 ROI 基线：SPM 125,593 cycles vs cache 6,138 cycles；1,280 DMA transfers / 40,960 bytes；waitFraction 0.4002、avgWaitStall 65.45、avgLatency 66.23。该数据证明路径正确并暴露小尺寸 MMIO/DMA 控制开销，不作为 performance win。
+    note: 2026-04-30 完成 single-load 双缓冲；2026-05-01 multi-load matcher 覆盖 final normalize。`transformReductionLoop` 已拆成两个 SPM buffer，prologue 发首块 DMA，body 顶部 `dma_wait` 等当前 buffer，随后向 alternate buffer 发 next prefetch 并翻转 `buf_idx`。lit 测试覆盖 body-top wait / buffer select / alternate-buffer enqueue / 2-D non-leading-IV stride / multi-load shared-IV streams。`make verify-layer_norm` 通过（38 `addrspace(3)`，78 `fence iorw`，tier JSON `{\"0\":3,\"1\":3,\"2\":3}`），`make cmp-layer_norm` 功能 PASS。最新 `workloads/m5out/layer_norm/*/compare.txt` 显示 reduction SPM 性能仍显著落后 cache：flushed 32x64、512x1024、1024x1024 都慢很多，noflush 32x64 也仍慢。该路径目前只证明 correctness/coverage，是明确的 reduction-performance blocker。
   - id: l2-warming-bench
     content: 实现并运行 `dma_l2_warming` microbenchmark，接通 per-checkpoint stats parser，并做 cacheable/UC/无 DMA 对照与 working-set sweep。前置条件：tier-sidecar-verify 确认 Tier 2 分配链路正常。
     status: completed
@@ -57,6 +57,9 @@ tasks:
   - id: graph-placement-backlog
     content: 在 Phase 5 transformer pipeline 前实现 `three-tier-placement.md` §2.1 / §6.2 的 graph-level conservative placement：中间 activation / producer output 默认 Tier 2，Tier 3 只给 external read-only DMA-only streaming tensor。
     status: pending
+  - id: transformer-kernel-coverage
+    content: 在 Phase 4 attention 前补 transformer-facing 单 kernel/harness 覆盖：activation（GELU/SiLU 或近似）、residual/add 等 cache-path elementwise kernel，以及 softmax 或另一个 reduction/streaming kernel。目标是证明低复用 elementwise 不误进 SPM，并让后续 transformer harness 有可链接的 AOT kernel。
+    status: pending
   - id: reuse-rules-backlog
     content: 仅在新 workload 需要时扩展 `three-tier-placement.md` §6.3 的 `has_scalar_reuse` 规则。
     status: pending
@@ -74,16 +77,17 @@ isProject: false
 - `phase3.md` 已更新为当前状态页：记录 P1/P2 plumbing、matmul P3 cold-start headline、reduction 双缓冲、multi-load matcher 与 layer_norm coverage baseline。
 - `../archive/matmul-spm-lowering-closure.md` 的 P0-P2 已完成：matmul 汇编形态已修复，`vfmacc.vf=256`、`vrgather=0`、spill/reload 与 cache baseline 对齐。
 - `SplitLargeContract` pass 已实现并验证：256×256×256 / 32×32×32 tile 下 SPM 比 cache 快 32.1%（3,777,998 vs 5,560,678 cycles）。通过 DMA 再灌注（re-priming）解决了多 micro-loop 的正确性问题。
-- P3 已通过 Stage 2.5（fair cold-cache baseline）+ Stage 3（MMIO packing + 移除 prologue wait）+ Stage 2.6（size/steady sweep）收敛：64×64 cold-start smoke 仅慢 +3.7%（38,361 vs 37,004 cycles），大尺寸 cold-start 1024×1024×1024 / 32×32×32 已反超 cache（288,976,339 vs 386,049,495 cycles，-25.1%）。P3 headline 采用 cold-start 口径；steady-state warm-cache 仅作辅助参考，不作为关键对象。
+- P3 已通过 Stage 2.5（fair cold-cache baseline）+ Stage 3（MMIO packing + 移除 prologue wait）+ Stage 2.6（size/steady sweep）收敛：matmul 大尺寸 cold-start 已反超 cache，小尺寸 smoke 也不再是回归点。P3 headline 采用 cold-start 口径；steady-state warm-cache 仅作辅助参考，不作为关键对象。入口文档暂不固定数字，因为 SPM/cache 最优 blocking 不同，最终需要 fair blocking sweep。
 - `three-tier-placement.md` 的 MVP 代码框架基本落地。当前覆盖：`matmul` 正常命中 Tier 3（args 0,1）；`vector_add` 空 JSON 是设计预期（单 block 无循环）；`layer_norm` 在 mean/variance/final normalize 命中 Tier 3（args 0,1,2）。详见 `three-tier-placement.md` §4.1。
 - 文档中"三个 workload 全部命中 Tier 3"的说法已修正。`verify-spm-fires` 工具已落地：`matmul` 与 `layer_norm` 通过 `make verify-<kernel>`；`vector_add` 预期未命中 SPM（见 `three-tier-placement.md` §4.1）。
 - `../evidence/l2_warming.md` Tier 2 L2-warming 验证完成（源码分析 + 微基准 2.8× 加速数据）。
 - `phase3-compiler-backlog.md` 里的 P1 稳健性事项已闭环：GEMM >2 loads、reduction matcher 泛化、DMA lowering options、GEMM/reduction bail-out cleanup/verification 均已完成。后续 workload 扩展若出现新 IR 形态再增量补 matcher。
+- `layer_norm` / reduction 当前是 coverage 成功但性能失败：`workloads/m5out/layer_norm/*/compare.txt` 下 flushed 32x64、512x1024、1024x1024 均远慢于 cache，noflush 32x64 也仍慢。先记录为 blocker，后续再拆原因。
 - `three-tier-placement.md` §6 是明确 backlog：§6.4 的验证补完已由工具化和 L2-warming evidence 覆盖；§6.2 graph-level placement 是 Phase 5 transformer 前的 P0，§6.1 Tier 1 和 §6.3 reuse 规则扩展按 workload 需求推进。
 
 ## Timeline Reading Order
 
-> **P3 成功标准**：`matmul` 以 cold-start fair baseline 为主口径。64×64 smoke case 用来守住代码形态和小尺寸回归（≤ cache × 1.05），论文 headline 应采用已实测的大尺寸 cold-start 数据；steady-state warm-cache 是 cache residency 辅助实验，不是 P3 关键对象。
+> **P3 成功标准**：`matmul` 以 cold-start fair baseline 为主口径。64-case smoke 用来守住代码形态和小尺寸回归；论文 headline 应采用大尺寸 cold-start blocking sweep，而不是旧单点数字。steady-state warm-cache 是 cache residency 辅助实验，不是 P3 关键对象。
 
 > **可并行**：Tier sidecar 核查、L2-warming microbenchmark、评测工具化和 reduction 正确性修复互不完全依赖，可按资源并行推进。
 
@@ -94,9 +98,11 @@ isProject: false
 5. Done: fix the `transformReductionLoop` 2-D non-leading-IV prefetch address bug.
 6. Done: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) and record the first `layer_norm` SPM coverage/perf baseline.
 7. Done: finish `phase3-compiler-backlog.md` P1 robustness work, including bail-out cleanup/verification.
-8. Current high priority for end-to-end transformer work: implement `three-tier-placement.md` §2.1 / §6.2 graph-level conservative placement so intermediate activations remain cacheable and Tier 3 is limited to external read-only DMA-only streaming tensors.
-9. Current optimization line: continue `spm-dma-reuse.md` fused microM-aware scheduler tuning and larger-run validation.
-10. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
+8. Current high priority before Phase 4: add transformer-facing single-kernel/harness coverage for cache-path activation/residual elementwise kernels and at least one additional reduction/streaming shape such as softmax.
+9. Current high priority for end-to-end transformer work: implement `three-tier-placement.md` §2.1 / §6.2 graph-level conservative placement so intermediate activations remain cacheable and Tier 3 is limited to external read-only DMA-only streaming tensors.
+10. Current optimization line: continue `spm-dma-reuse.md` fused microM-aware scheduler tuning and larger-run validation.
+11. Current blocker to record and later investigate: reduction SPM performance is far behind cache even though functional coverage passes.
+12. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
 
 ## 阶段化执行计划
 
@@ -132,15 +138,15 @@ isProject: false
 - **背景**：Stage 2.5 给的是 cold-cache 公平 baseline。补跑 steady-state 与 size sweep 后，P3 口径明确为 cold-start：steady-state warm-cache 主要测 cache residency，不作为 matmul P3 的关键对象。
 - **范围**：(a) 在 harness 增加 N 次 kernel 重复跑、丢弃前 K 次的 measure 模式；(b) 暴露 `MATMUL_SIZE` 配置或新增 128/256 尺寸 config；(c) 通过统一 `make cmp-matmul` / `make sweep-matmul SWEEP=size` 入口跑 compare 与 size sweep。
 - **交付物**：`../archive/matmul-spm-lowering-closure.md` §P3.5 补 steady-state + 大尺寸数据；论文头数应从大尺寸里挑。
-- **当前记录（2026-04-29）**：工具链已落地，默认 64 cold-cache 行为保持不变。已跑 steady preset compare：64×64 steady warm-cache PASS，SPM 29,999.0 cy/iter vs cache 19,485.8 (+54.0%)。已跑 size sweep：128×128 cold-cache PASS，SPM 249,322 vs cache 219,288 (+13.7%)。后续 256×256 cold-cache 与 128×128/256×256 steady-state sweep 已补完；当前大尺寸 cold-start 1024×1024×1024 / 32×32×32 PASS，SPM 288,976,339 cycles vs cache 386,049,495 cycles，SPM 快 25.1%。
-- **验证**：steady-state cache mode 比 cold-cache 显著更快，说明 warm-cache 重复 launch 主要反映 cache residency；P3 headline 使用 cold-start 大尺寸数据。相关 sweep 不再是 pending。
+- **当前记录（2026-05-02）**：工具链已落地，默认 64 cold-cache 行为保持不变；size/steady sweep 已补完，matmul 大尺寸 cold-start 已看到 SPM crossover。由于 SPM/cache 最优 blocking 不同，入口文档暂不引用旧单点数字；最终 headline 需要 fair blocking sweep。
+- **验证**：steady-state cache mode 比 cold-cache 显著更快，说明 warm-cache 重复 launch 主要反映 cache residency；P3 headline 使用 cold-start 大尺寸 blocking sweep。相关 sweep 不再是 pending。
 - **范围限制**：harness/Makefile 改动；不动编译器或 simulator。
 - **对应 task**：`steady-state-and-size-sweep`。
 
 ### Stage 3 — P3 back-end 压力修复（completed）
 - **范围**：基于 Stage 1 证据，主攻 68.8% cycle gap 所在的 MMIO descriptor store 路径。优先级（与 P3.2 一致）：(1) 合并 / 压缩 MMIO descriptor stores 为更少的 64-bit 写或单条 descriptor-block 触发命令——目标 back-end 压力 11,341 cy 桶；(2) 跳过最后一轮顶部 `dma_wait`（前置：先按 buffer 映射验证冗余）——~960 cy；(3) 把 prefetch 提前到 body 更早位置——最多 ~2,400 cy（DMA wait 桶上限）。每次只改一项并重测。
 - **交付物**：`transformGemmLoop`（或 `DmaOpsToLLVM`）的最小 patch + before/after stats 对比记录。
-- **验证**：`make cmp-matmul` 通过；`numCycles` 相比 Stage 2.5 的 39,480 显著下降，目标 ≤ fair cache × 1.05（37,004 × 1.05 ≈ 38,854）。64×64 是 smoke/regression guard；headline 由 Stage 2.6 的实测大尺寸 cold-start 数据决定，steady-state 只作辅助参考。
+- **验证**：`make cmp-matmul` 通过；64-case 是 smoke/regression guard；headline 由 Stage 2.6+ 的大尺寸 cold-start blocking sweep 决定，steady-state 只作辅助参考。
 - **范围限制**：不动 reduction 路径；不重构 matcher。
 - **对应 task**：`p3-wait-semantics`、`p3-reduce-wait-cost`、`p3-prefetch-timing`。
 
@@ -155,7 +161,7 @@ isProject: false
 - **背景**：`transformGemmLoop` 已是双缓冲 + prologue prefetch（../archive/matmul-spm-lowering-closure.md §P3.1 实测 DMA 延迟 62.3% 被 overlap 隐藏）。但 `transformReductionLoop` 仍是 *单缓冲* prefetch：每轮 body 先 `vector.transfer_read` 当前 chunk → 再 `dma_enqueue_2d` 下一 chunk → `dma_wait`，CPU 必须等 DMA 完成才能进入下一轮。这意味着 layer_norm / softmax / 未来所有 reduction kernel 的 DMA 延迟全部串行暴露在关键路径，是 reduction 路径性能基线偏弱的结构性原因。
 - **范围**：把 reduction 路径升级到与 GEMM 同等的双缓冲方案：(a) 分配两个 SPM staging buffer；(b) prologue 发首轮 prefetch + wait；(c) body 顶 wait 当前 buffer、读完之后发下一轮 prefetch（不在 body 末尾 wait）；(d) bail-out 路径清残留 enqueue（GEMM 已踩过的坑）；(e) 复用 GEMM 的 buffer-flip 计数 / index 计算结构，避免再造一套。
 - **交付物**：`transformReductionLoop` patch + `layer_norm` 的 block-pointer mean/variance/final normalize path + 32x64 gem5 baseline。
-- **验证**：`compiler/test/TritonCPU/convert-memory-to-spm.mlir` 通过，覆盖 reduction body-top wait、buffer select、alternate-buffer prefetch、multi-load shared-IV streams 与 non-leading-IV stride。`make verify-layer_norm` 通过：LLIR `addrspace(3)=38`、`fence iorw=78`，tier JSON `{"0":3,"1":3,"2":3}`。`make cmp-layer_norm` 两侧功能 PASS；32x64 ROI SPM 125,593 cycles vs cache 6,138 cycles，1,280 DMA transfers / 40,960 bytes，waitFraction 0.4002，avgWaitStall 65.45 vs avgLatency 66.23。小尺寸仍慢，说明下一步应减少 reduction-path MMIO/control 开销，而不是把该点当性能 headline。
+- **验证**：`compiler/test/TritonCPU/convert-memory-to-spm.mlir` 通过，覆盖 reduction body-top wait、buffer select、alternate-buffer prefetch、multi-load shared-IV streams 与 non-leading-IV stride。`make verify-layer_norm` 通过：LLIR `addrspace(3)=38`、`fence iorw=78`，tier JSON `{"0":3,"1":3,"2":3}`。`make cmp-layer_norm` 两侧功能 PASS；当前 compare 文件显示 performance 严重落后 cache，先作为 blocker 记录，后续再拆原因。
 - **范围限制**：只改 `transformReductionLoop`，不动 matcher，不动 GEMM 路径。
 - **依赖**：Stage 4（2-D 地址 bug 必须先修，否则双缓冲化只会放大错误地址的影响），并建议在 `tier-sidecar-verify` 之后做（先确认 layer_norm 真正进入了 SPM lowering 路径）。
 - **对应 task**：`reduction-single-buffer-pipeline`（completed）。

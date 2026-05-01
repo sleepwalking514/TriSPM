@@ -210,9 +210,11 @@
 **结论**：
 
 - `matmul` 是当前成熟的 SPM performance workload，tier sidecar 工作正常。
-- `layer_norm` 现在是 reduction-path SPM coverage workload；32x64
-  `make cmp-layer_norm` 功能 PASS，但 ROI SPM 125,593 cycles vs cache
-  6,138 cycles，说明该小尺寸点主要暴露 MMIO/DMA 控制开销。
+- `layer_norm` 现在是 reduction-path SPM coverage workload；`make
+  cmp-layer_norm` 功能 PASS，但 `workloads/m5out/layer_norm/*/compare.txt`
+  显示当前 SPM reduction 性能明显落后 cache。flushed 32x64、512x1024、
+  1024x1024 都很差，noflush 32x64 也仍慢。这条路径目前是
+  correctness/coverage 证据，不是 performance win。
 - `vector_add` 不需要 SPM（无 tile reuse），空 JSON 是正确行为。文档中"三个 workload 全部命中 Tier 3"的说法不准确，已修正。
 
 ---
@@ -243,6 +245,19 @@
 - 规则优先级：intermediate activation / producer output 默认 Tier 2；Tier 3 只用于 external read-only DMA-only streaming tensors；不确定时 Tier 2。
 - graph mode 需要能覆盖 kernel-local `_tiers.json`，避免连续 matmul 中 `C` 作为下游 input 时被错误分到 UC。
 - 最小验证 workload：`matmul -> matmul`，确认第一个 matmul 的 C 仍为 cacheable，第二个 matmul 可以从 cacheable C 做 DMA tiling；随后扩展到 `matmul -> residual/layer_norm -> matmul`。
+
+### 6.2.1 Transformer-facing kernel harness coverage
+- 在 Phase 4 attention 前补齐 AOT harness / manifest / verify 覆盖，而不是等
+  transformer 大 harness 第一次链接时才发现缺口。
+- activation（GELU/SiLU 或近似）和 residual/add 这类 elementwise kernel
+  预期保持 cache path；它们不需要单独的 SPM transform，除非未来和 matmul /
+  reduction 融合后形成有 tile reuse 的 kernel。
+- softmax 或另一个 canonical block-pointer reduction/streaming kernel 需要
+  单独 smoke coverage，因为它会复用 `transformReductionLoop`，也能暴露当前
+  reduction 性能 blocker 是否普遍存在。
+- 第一版目标：这些 kernel 能 AOT build、cache/SPM 两种模式都功能 PASS；
+  verify 要确认 elementwise 不误命中 SPM、reduction/streaming 按预期命中或
+  保守回退。
 
 ### 6.3 `has_scalar_reuse` 扩展规则 (D4)
 - `vector.extract` 抽出 scalar 后再 broadcast 算 scalar reuse。

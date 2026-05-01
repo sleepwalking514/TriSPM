@@ -39,7 +39,7 @@ Input tensor (seq_len × d_model)
 1. **Matmul (GEMM)** — double-buffered A/B tiles in K-loop (highest SPM benefit)
 2. **Reduction (LayerNorm, Softmax)** — double-buffered DMA prefetch along reduction axis for single-load tiled reductions
 3. **Attention** — multi-tensor SPM allocation for Q/K/V/O tiles, nested loops
-4. **Elementwise (ReLU, residual add)** — streaming prefetch or leave in cache (low reuse)
+4. **Elementwise (activation, residual add)** — normally leave in cache unless fused into a higher-reuse kernel
 
 ---
 
@@ -220,6 +220,33 @@ Current status:
   lower into the reduction/streaming `transformReductionLoop` pattern.
   `make verify-layer_norm` checks for `addrspace(3)` / `fence iorw`, and
   `make cmp-layer_norm` verifies functional correctness on gem5.
+- Performance status is not acceptable yet: current
+  `workloads/m5out/layer_norm/*/compare.txt` runs show SPM layer_norm far
+  slower than cache on flushed 32x64, 512x1024, and 1024x1024 comparisons, and
+  still slower on noflush 32x64. Treat reduction as coverage-complete but
+  performance-blocked.
+
+### 3d. Transformer-facing single-kernel coverage before Phase 4
+
+Before treating Phase 4 attention as unblocked, add workload harness coverage
+for the non-attention kernels that the transformer block will need:
+
+- **Activation**: GELU/SiLU approximation or whichever activation the target
+  FFN uses. This should normally stay cache-only; verify that SPM mode builds
+  and runs without accidentally inserting SPM for low-reuse elementwise loads.
+- **Residual/add**: cache-path elementwise producer for the activation
+  backbone; again, coverage/harness matters more than an SPM transform.
+- **Softmax or another reduction/streaming kernel**: reuse the canonical
+  block-pointer `transformReductionLoop` path and expose whether the current
+  layer_norm performance issue generalizes.
+- **Matmul variants used by Q/K/V/FFN**: already based on GEMM, but should be
+  represented in manifests with transformer-like shapes and blocking sweeps.
+
+Recommended rule: do not write a special SPM pass for standalone activation or
+residual/add. Keep them as cache-path kernels and let graph placement preserve
+their producer/consumer activations as Tier 2. Only revisit SPM for elementwise
+work if it is fused with matmul, layer_norm, softmax, or attention and gets real
+tile reuse.
 
 ### 3c. Data placement policy
 
@@ -548,13 +575,17 @@ The three-tier placement policy is the paper's most valuable insight. The Tier 2
 single-load reduction path through its mean/variance passes; it is the current
 production reduction coverage workload rather than a separate synthetic
 `reduction` workload. `vector_add` is intentionally too trivial for SPM
-tiling. Need at least 5 representative kernels:
+tiling. Before Phase 4 attention, add transformer-facing harness coverage even
+for kernels that should remain cache-only. Need at least 5 representative
+kernels:
 
 | Kernel | Type | SPM Pattern | Priority |
 |--------|------|-------------|----------|
-| matmul | GEMM | double-buffer ✅ | Done |
-| layer_norm | reduction | double-buffer ✅ for mean/variance/final normalize | Coverage done; tiny-shape MMIO overhead remains |
-| softmax | reduction | double-buffer once canonical block-pointer matcher fires | P1/P2 — add workload and reuse reduction pattern |
+| matmul | GEMM | double-buffer / fused micro scheduler ✅ | Done; final headline needs blocking sweep |
+| layer_norm | reduction | double-buffer ✅ for mean/variance/final normalize | Coverage done; performance blocker |
+| activation (GELU/SiLU) | elementwise | cache path expected | P0 before transformer harness; no standalone SPM pass expected |
+| residual_add | elementwise | cache path expected | P0 before transformer harness; verify no accidental SPM |
+| softmax | reduction | double-buffer once canonical block-pointer matcher fires | P1 — add workload and reuse reduction pattern |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | double-buffer once matcher fires | P2 — diversify workload mix |
 
