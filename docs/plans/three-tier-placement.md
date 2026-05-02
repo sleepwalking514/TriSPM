@@ -278,10 +278,49 @@ Verification:
 - 配套 workload：softmax / 小型 attention，要求有 scalar reuse + 整 tensor 能装下 SPM。
 
 ### 6.2 Graph-level placement for transformer pipeline (P0)
-- 实现 §2.1 的 tensor-edge metadata 和 graph placement manifest。
-- 规则优先级：intermediate activation / producer output 默认 Tier 2；Tier 3 只用于 external read-only DMA-only streaming tensors；不确定时 Tier 2。
-- graph mode 需要能覆盖 kernel-local `_tiers.json`，避免连续 matmul 中 `C` 作为下游 input 时被错误分到 UC。
-- 最小验证 workload：`matmul -> matmul`，确认第一个 matmul 的 C 仍为 cacheable，第二个 matmul 可以从 cacheable C 做 DMA tiling；随后扩展到 `matmul -> residual/layer_norm -> matmul`。
+
+Status: **build/verify MVP landed (2026-05-02)**.
+
+Implemented:
+
+- `workloads/graphs/layer_norm_qkv/graph.toml` defines the first graph-edge
+  metadata fixture: LayerNorm produces an intermediate activation consumed by
+  Q/K/V matmul nodes; Q/K/V weights are external read-only DMA-only tensors.
+- `workloads/scripts/graph_placement.py` consumes that manifest, applies the
+  conservative §2.1 rules, prints a placement plan, builds per-node SPM
+  artifacts with `KERNEL_TIER_OVERRIDE`, and verifies launcher allocation
+  dispatch.
+- The MVP deliberately stays above the compiler lowering layer.  It uses the
+  existing launcher override hook instead of changing `SPMTensorPlacement` or
+  `ConvertMemoryToSPM`, so it can run in parallel with explicit-promotion work.
+- Verified policy for the first fixture: producer output / intermediate
+  activation stays Tier 2; downstream matmul activation input stays Tier 2;
+  external read-only Q/K/V weights can be Tier 3; outputs remain Tier 2.
+
+Not implemented yet:
+
+- No executable multi-kernel graph harness yet.  The current tool proves
+  generated backing allocation decisions; it does not link multiple AOT
+  kernels, share runtime tensor pointers, or run gem5 for the graph.
+- No graph-vs-cache comparison yet.  Cache baseline policy should keep all
+  tensors cacheable unless a specific experiment intentionally studies UC
+  backing placement.
+- No Tier 1 resident SPM support.  The manifest may document future hot-state
+  intent, but the planner rejects Tier 1 as an implementation target for now.
+- No fused SPM promotion.  Graph placement decides backing allocation across
+  kernel boundaries; `spm-explicit-promotion.md` owns tile/value residency
+  inside fused regions.
+
+Next work:
+
+- Add an executable graph harness that allocates shared graph tensors once,
+  calls per-node launchers in order, materializes explicit fallback boundaries
+  to Tier 2, and checks results.
+- Extend the fixture set from `layer_norm -> qkv` to attention-facing schedules
+  (`qk`, softmax, `pv`, residual/activation) once the required shapes and AOT
+  symbol naming are settled.
+- Feed graph placement metadata into Phase 6 comparison scripts so graph-level
+  SPM/Tier decisions and cache-only baselines are reported from one manifest.
 
 ### 6.2.1 Transformer-facing kernel harness coverage
 - [🆗] 第一版已完成（2026-05-02）：`activation`（SiLU）、

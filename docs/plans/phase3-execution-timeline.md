@@ -1,6 +1,6 @@
 ---
 name: TriSPM Phase 3 Execution Timeline
-overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛并已看到 SPM crossover，但最终 headline 需要 SPM/cache blocking sweep 后再定；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher、bail-out cleanup/verification 和 Phase 4 前 transformer-facing workload smoke coverage 均已完成。LayerNorm/reduction SPM 现在默认关闭，仅保留 opt-in correctness/coverage 路径。当前主线是 graph-level placement、attention/fusion 原型、fused DMA reuse tuning 和 Phase 6 评测扩展。
+overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛并已看到 SPM crossover，但最终 headline 需要 SPM/cache blocking sweep 后再定；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher、bail-out cleanup/verification、Phase 4 前 transformer-facing workload smoke coverage 和 graph-level conservative placement build/verify MVP 均已完成。LayerNorm/reduction SPM 现在默认关闭，仅保留 opt-in correctness/coverage 路径。当前主线是 attention/fusion 可执行原型、fused DMA reuse tuning、promotion evidence 和 Phase 6 评测扩展。
 tasks:
   - id: p3-profile-overlap
     content: 画清 matmul prefetch enqueue、current buffer 读取、下一轮 dma_wait 成功之间的时间线，确认是否存在真实 overlap。
@@ -56,6 +56,10 @@ tasks:
     status: pending
   - id: graph-placement-backlog
     content: 在 Phase 5 transformer pipeline 前实现 `three-tier-placement.md` §2.1 / §6.2 的 graph-level conservative placement：中间 activation / producer output 默认 Tier 2，Tier 3 只给 external read-only DMA-only streaming tensor。
+    status: completed
+    note: 2026-05-02 完成 build/verify MVP：新增 graph manifest + `workloads/scripts/graph_placement.py`，从 tensor-edge metadata 生成每个 node 的 `KERNEL_TIER_OVERRIDE`，构建 SPM artifacts 并核对 launcher dispatch。第一版示例 `layer_norm_qkv` 验证 layer_norm output / qkv input activation 保持 Tier 2，Q/K/V external weights 可 Tier 3。范围限制：不链接/运行 multi-kernel graph，不做 Tier 1，不改 `ConvertMemoryToSPM`，不实现 fused promotion。
+  - id: graph-executable-harness
+    content: 把 graph-level placement 从 build/verify MVP 升级为可执行 multi-kernel harness：显式 materialization/fallback 边界、共享 tensor allocation、按 node 顺序调用 launcher，并能和 cache-only baseline 比较。
     status: pending
   - id: transformer-kernel-coverage
     content: 在 Phase 4 attention 前补 transformer-facing 单 kernel/harness 覆盖：activation（GELU/SiLU 或近似）、residual/add 等 cache-path elementwise kernel，以及 softmax 或另一个 reduction/streaming kernel。目标是证明低复用 elementwise 不误进 SPM，并让后续 transformer harness 有可链接的 AOT kernel。
@@ -85,7 +89,7 @@ isProject: false
 - `phase3-compiler-backlog.md` 里的 P1 稳健性事项已闭环：GEMM >2 loads、reduction matcher 泛化、DMA lowering options、GEMM/reduction bail-out cleanup/verification 均已完成。后续 workload 扩展若出现新 IR 形态再增量补 matcher。
 - `layer_norm` / reduction SPM 是 coverage 成功但性能失败：归档 opt-in compare 下 flushed 32x64、512x1024、1024x1024 均远慢于 cache，noflush 32x64 也仍慢。默认 AOT 已关闭 reduction SPM，使 LayerNorm 回到 cache path；后续新增 softmax 等 reduction workload 时应先默认 cache，再显式 opt-in 评估 SPM。
 - Phase 4 前 transformer-facing workload smoke coverage 已落地：`activation`（SiLU）、`residual_add`、row-wise `softmax` 均可 AOT build、verify cache-path policy、在 gem5 SPM/cache 两种模式下跑 flushed ROI 并 PASS result check。
-- `three-tier-placement.md` §6 是明确 backlog：§6.2 graph-level placement 是 Phase 5 transformer 前的 P0，§6.1 Tier 1 和 §6.3 reuse 规则扩展按 workload 需求推进；§6.2.1 的第一版单 kernel coverage 已完成，后续扩展应围绕 attention/fusion 需要补 shape 或 fused harness。
+- `three-tier-placement.md` §6.2 的第一版 graph-level conservative placement 已完成到 build/verify 层：它能证明 graph edge 的 Tier 2/3 backing allocation 决策，但还不能替代可执行 transformer harness 或 fused promotion。§6.1 Tier 1、§6.3 reuse 规则扩展、以及 graph executable harness 按 workload 需求继续推进；§6.2.1 的第一版单 kernel coverage 已完成，后续扩展应围绕 attention/fusion 需要补 shape 或 fused harness。
 
 ## Timeline Reading Order
 
@@ -101,8 +105,8 @@ isProject: false
 6. Done: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) and record the first `layer_norm` SPM coverage/perf baseline.
 7. Done: finish `phase3-compiler-backlog.md` P1 robustness work, including bail-out cleanup/verification.
 8. Done: add transformer-facing single-kernel/harness coverage for cache-path activation/residual elementwise kernels and one additional reduction/streaming shape (`softmax`).
-9. Current high priority for end-to-end transformer work: implement `three-tier-placement.md` §2.1 / §6.2 graph-level conservative placement so intermediate activations remain cacheable and Tier 3 is limited to external read-only DMA-only streaming tensors.
-10. Current high priority before a full transformer driver: add attention-facing shape presets / fused-region harnesses that stitch matmul, softmax, residual/add, activation, and layer_norm in the intended order.
+9. Done: implement the graph-level conservative placement build/verify MVP. `workloads/scripts/graph_placement.py` consumes a graph manifest, generates per-node `KERNEL_TIER_OVERRIDE`, builds SPM artifacts, and verifies launcher allocation dispatch without touching promotion lowering.
+10. Current high priority before a full transformer driver: add executable attention/fusion harnesses that stitch matmul, softmax, residual/add, activation, and layer_norm in the intended order and compare against cache-only baselines.
 11. Current optimization line: continue `spm-dma-reuse.md` fused microM-aware scheduler tuning and larger-run validation.
 12. Current blocker to record and later investigate: opt-in reduction SPM performance is far behind cache even though functional coverage passes.
 13. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.

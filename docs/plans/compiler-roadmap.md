@@ -568,7 +568,11 @@ Run the same kernels on gem5 in cache-only mode (no SPM hardware, no ConvertMemo
 The three-tier placement policy is the paper's most valuable insight. The Tier 2/3 MVP plumbing has landed, and the L2-warming side effect is verified in `../evidence/l2_warming.md`; the remaining work is to connect Tier 2 to broader scalar-reuse workloads, add graph-level conservative placement for transformer edges, and compare it against cache baselines.
 
 - Extend Tier 2 workload coverage: tensors with scalar reuse that exceed SPM capacity should go to cacheable DRAM.
-- Implement graph-level placement: intermediate activations and producer outputs default to Tier 2, while Tier 3 is reserved for external read-only DMA-only streaming tensors.
+- Graph-level conservative placement build/verify MVP is in place:
+  `workloads/scripts/graph_placement.py` reads graph tensor-edge metadata,
+  forces intermediate activations and producer outputs to Tier 2, and reserves
+  Tier 3 for external read-only DMA-only tensors.  The remaining work is an
+  executable multi-kernel graph harness plus cache-baseline comparison.
 - Use the completed L2-warming evidence as the mechanism proof: after DMA reads from cacheable DRAM, L2 holds data copies.
 - Compare Tier 2 vs pure cache on real kernels: prove "cacheable + DMA tiling" is never worse than cache (performance floor guarantee).
 
@@ -609,6 +613,7 @@ that should remain cache-only. Need at least 5 representative kernels:
 | activation (SiLU) | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
 | residual_add | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
 | softmax | reduction | cache path by default; opt-in SPM only if measured useful | Done for row-wise smoke coverage; promotion/perf experiments remain |
+| layer_norm -> qkv graph | graph placement | activation Tier 2, external weights Tier 3 | Build/verify MVP done; executable harness pending |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | cache path by default | P2 — diversify workload mix |
 
@@ -648,7 +653,7 @@ Phase 1 (AOT cross-compile) ✅ COMPLETE
               │     └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
                     ├─ 6a Cache baseline [Phase 3 matmul/layer_norm baseline ready]
-                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence done]
+                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + graph build/verify done; executable graph pending]
                     ├─ 6c Additional workloads [after Phase 3/4 pattern support]
                     ├─ 6d Breakdown analysis [built on 6a data]
                     ├─ 6e Area comparison [independent, can start anytime]

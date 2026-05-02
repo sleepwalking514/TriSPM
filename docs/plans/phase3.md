@@ -57,6 +57,14 @@ automatically:
   result checks, `make verify-<kernel>` policy checks, and SPM-vs-cache smoke
   compares. These are coverage/harness workloads; they do not add new default
   SPM promotion policy.
+- Graph-level conservative placement has a build/verify MVP:
+  `workloads/scripts/graph_placement.py` reads graph tensor-edge metadata,
+  emits per-node `KERNEL_TIER_OVERRIDE`, builds SPM artifacts, and verifies
+  launcher allocation dispatch. The first fixture, `layer_norm_qkv`, keeps the
+  LayerNorm producer output / QKV activation input cacheable Tier 2 while
+  allowing external read-only Q/K/V weights to use Tier 3. This does not yet
+  link or run a multi-kernel graph, implement Tier 1, or perform fused
+  promotion.
 
 ### Current State of P3
 
@@ -110,7 +118,9 @@ classify no-scalar-reuse inputs as Tier 3. For end-to-end transformer work,
 the policy is stricter and graph-aware: intermediate activations and kernel
 outputs stay Tier 2 cacheable by default; Tier 3 is reserved for external
 read-only DMA-only streaming inputs/weights; Tier 1 is future SPM-resident hot
-state. See `three-tier-placement.md` §2.1.
+state. The first graph-level build/verify planner implements this policy above
+the compiler lowering layer; executable graph harnesses remain next work. See
+`three-tier-placement.md` §2.1 / §6.2.
 
 The MVP framework is landed. Current workload verification confirms:
 
@@ -164,10 +174,11 @@ See `three-tier-placement.md` §4.1 for full analysis.
    transformer-facing single-kernel coverage.~~ Done (2026-05-02): `activation`
    (SiLU), `residual_add`, and row-wise `softmax` build, verify clean cache-path
    policy, run flushed ROI compares, and check results under gem5 in both modes.
-7. Before the transformer pipeline, implement graph-level conservative
-   placement (`three-tier-placement.md` §2.1 / §6.2): cacheable activation
-   backbone, selective uncacheable streaming inputs, and future Tier-1 hot
-   state.
+7. ~~Before the transformer pipeline, implement graph-level conservative
+   placement build/verify (`three-tier-placement.md` §2.1 / §6.2).~~ Done:
+   the `layer_norm_qkv` graph fixture verifies the cacheable activation
+   backbone and selective uncacheable external weights. Remaining work is an
+   executable multi-kernel graph harness plus cache-baseline comparison.
 
 ## Configuration Notes
 
@@ -183,8 +194,9 @@ specific experiment intentionally overrides the environment.
 
 ## What Is Not Phase 3 Critical Path
 
-- Graph-level conservative placement is not needed for the single-kernel P3
-  headline, but it is P0 for Phase 5 transformer evaluation.
+- Graph-level conservative placement build/verify is not needed for the
+  single-kernel P3 headline and is now in place; the executable graph harness
+  and graph-vs-cache comparison are P0 for Phase 5 transformer evaluation.
 - Elementwise activation/residual kernels usually should not get an SPM pass
   in isolation. They should have harness/verify coverage and normally remain
   cache-path kernels unless fused into a neighboring matmul/reduction/attention

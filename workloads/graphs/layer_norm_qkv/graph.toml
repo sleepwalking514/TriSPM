@@ -1,0 +1,106 @@
+[graph]
+name = "layer_norm_qkv"
+description = "Build/verify fixture for conservative graph placement before a fused LayerNorm + QKV prototype."
+
+[tensors.x]
+kind = "external_input"
+read_only = true
+dma_only = false
+note = "LayerNorm stays cache-path by default, so the input remains cacheable."
+
+[tensors.gamma]
+kind = "external_weight"
+read_only = true
+dma_only = false
+note = "LayerNorm parameter with scalar/reduction-style access; keep cacheable."
+
+[tensors.beta]
+kind = "external_weight"
+read_only = true
+dma_only = false
+note = "LayerNorm parameter with scalar/reduction-style access; keep cacheable."
+
+[tensors.ln_out]
+kind = "intermediate"
+producer = "layer_norm"
+consumers = ["q_proj", "k_proj", "v_proj"]
+note = "Activation backbone: producer output and downstream input must stay Tier 2."
+
+[tensors.wq]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.wk]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.wv]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.q]
+kind = "graph_output"
+producer = "q_proj"
+
+[tensors.k]
+kind = "graph_output"
+producer = "k_proj"
+
+[tensors.v]
+kind = "graph_output"
+producer = "v_proj"
+
+[nodes.layer_norm]
+kernel = "layer_norm"
+args = ["x", "gamma", "beta", "ln_out"]
+tag = "graph/layer_norm_qkv/layer_norm"
+
+[nodes.layer_norm.params]
+M = 32
+N = 64
+CHECK_RESULT = 0
+
+[nodes.q_proj]
+kernel = "matmul"
+args = ["ln_out", "wq", "q"]
+tag = "graph/layer_norm_qkv/q_proj"
+
+[nodes.q_proj.params]
+M = 32
+N = 64
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.k_proj]
+kernel = "matmul"
+args = ["ln_out", "wk", "k"]
+tag = "graph/layer_norm_qkv/k_proj"
+
+[nodes.k_proj.params]
+M = 32
+N = 64
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.v_proj]
+kernel = "matmul"
+args = ["ln_out", "wv", "v"]
+tag = "graph/layer_norm_qkv/v_proj"
+
+[nodes.v_proj.params]
+M = 32
+N = 64
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0

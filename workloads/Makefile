@@ -13,6 +13,7 @@
 #   make cmp-<kernel> SET="CHECK_RESULT=0"
 #   make cmp-matmul SET="N=512 M=512 K=512 BLOCK_SIZE_M=64"
 #   make verify-<kernel>          check LLIR for SPM markers + tier JSON
+#   make verify-graph GRAPH=layer_norm_qkv
 #   make verify                   verify all kernels (continues past failures)
 #   make sweep-matmul SWEEP=size [PRESET=steady] [SET="CHECK_RESULT=0"]
 #
@@ -39,8 +40,10 @@ KERNELS := vector_add matmul layer_norm activation residual_add softmax
 PRESET ?=
 SWEEP  ?=
 SET    ?=
+GRAPH  ?= layer_norm_qkv
 
 DRIVER := python3 ./scripts/run_experiment.py
+GRAPH_DRIVER := python3 ./scripts/graph_placement.py
 
 # Translate make-vars to driver flags.
 PRESET_FLAG := $(if $(PRESET),--preset $(PRESET),)
@@ -52,7 +55,7 @@ CMP_TARGETS    := $(addprefix cmp-,$(KERNELS))
 SWEEP_TARGETS  := $(addprefix sweep-,$(KERNELS))
 VERIFY_TARGETS := $(addprefix verify-,$(KERNELS))
 
-.PHONY: all clean verify $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
+.PHONY: all clean verify plan-graph build-graph verify-graph $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
 
 all: $(BUILD_TARGETS)
 
@@ -76,6 +79,15 @@ $(SWEEP_TARGETS): sweep-%:
 # Verify SPM markers in LLIR + tier JSON + launcher (build-only, no gem5).
 $(VERIFY_TARGETS): verify-%:
 	@$(DRIVER) $* --mode verify $(PRESET_FLAG) $(SET_FLAG)
+
+plan-graph:
+	@$(GRAPH_DRIVER) $(GRAPH) --mode plan
+
+build-graph:
+	@$(GRAPH_DRIVER) $(GRAPH) --mode build
+
+verify-graph:
+	@$(GRAPH_DRIVER) $(GRAPH) --mode verify
 
 # Verify all kernels (continues past individual failures, reports at end).
 verify:
