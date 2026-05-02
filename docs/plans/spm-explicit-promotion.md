@@ -39,6 +39,128 @@ If the answer is no, leave the operation on the cache path.  Tier 2 remains the
 safe backing placement for graph edges and mixed cache/SPM pipelines, but it is
 not a substitute for SPM residency.
 
+## Top-Priority Implementation Decisions
+
+These decisions are intentionally narrow.  The first goal is to prove the
+promotion model without destabilizing the working matmul path; only after each
+validation gate passes should the next generalization happen.
+
+### D1. Start With An Internal Promotion Record, Then Export Evidence
+
+First step:
+
+- Add a pass-local C++ promotion record inside `ConvertMemoryToSPM`.
+- Record `source`, `scope`, `shape`, `uses`, `bytes`, `copy_in`, `copy_out`,
+  and rejection reason.
+- Refactor the existing fused matmul scheduler to populate these records for
+  B-window, A-micro, and accumulator tiles without changing generated IR.
+
+Validation:
+
+- `make verify-matmul` must produce the same SPM policy as before.
+- Existing matmul compare/sweep points should not regress beyond measurement
+  noise.
+- Debug output or sidecar data must make promoted bytes, use count, and rejected
+  candidates visible.
+
+Only after this validation:
+
+- Use the records to drive `windowK` selection.
+- Consider making promotion records a more durable IR attribute, JSON sidecar,
+  or graph manifest.  Do not design a permanent manifest before the single-kernel
+  and first fusion experiments show what information is actually needed.
+
+### D2. Keep Row-Resident Reduction Separate From Streaming Reduction
+
+First step:
+
+- Add a new opt-in row-resident lowering before `transformReductionLoop`.
+- Keep the existing streaming reduction path as opt-in correctness coverage.
+- First target is LayerNorm `x[row, :]` only: DMA one row into SPM, reduce mean
+  from SPM, reduce variance from the same SPM row, and normalize from the same
+  SPM row.
+- Keep `gamma` and `beta` on the cache path in the first version unless their
+  cross-row reuse is made explicit by a later schedule.
+
+Initial scope:
+
+- Static `N`.
+- fp32 only unless another dtype is needed by a concrete experiment.
+- `row_bytes = N * sizeof(T)` must fit a conservative row-resident budget.
+  Start with `N <= 1024` / 4 KiB rows for the prototype, then sweep the budget
+  upward only after measurements justify it.
+- Require at least two uses of the row before eviction; LayerNorm should expose
+  three uses of `x`.
+
+Validation:
+
+- `make verify-layer_norm` remains cache path by default.
+- `TRITON_ENABLE_SPM_REDUCTIONS=1` continues to exercise the old streaming
+  coverage path.
+- A separate opt-in row-resident flag verifies that `x` is promoted once per row
+  and reused across mean/variance/normalize.
+- 32x64 and 512x1024 must beat or match the cache baseline before this path can
+  become a default policy.
+
+Only after this validation:
+
+- Generalize from LayerNorm to softmax or another canonical block-pointer
+  reduction.
+- Consider row/block residency for producer results, not just memref arguments.
+
+### D3. Use A Conservative Profitability Gate Before Default Promotion
+
+First step:
+
+- Implement static guards first: static access pattern, bounded lifetime,
+  `uses >= 2`, row/tile bytes within budget, and live SPM bytes within capacity.
+- Count DMA descriptors, MMIO stores, waits, fences, copy bytes, and avoided
+  repeated reads/writes.
+- If the model cannot prove reuse and bounded overhead, leave the operation on
+  the cache path.
+
+Validation:
+
+- The model must reject the current tiny-chunk streaming LayerNorm SPM path by
+  default.
+- The model must accept the existing matmul fused scheduler cases that already
+  perform well.
+- The model must explain decisions in debug output so failed experiments are
+  diagnosable without reading generated IR by hand.
+
+Only after this validation:
+
+- Fit constants from gem5 stats for descriptor/MMIO/fence overhead.
+- Use measured constants to tune thresholds.  Do not make the first version
+  profile-guided; keep it deterministic and conservative.
+
+### D4. Delay Graph/Fusion Manifest Design Until One Fusion Exists
+
+First step:
+
+- Treat graph/fusion promotion as the next layer after single-kernel promotion
+  is working.
+- Keep graph-level Tier 2/3 placement conservative: unfused tensor boundaries
+  stay cacheable unless they are external read-only DMA-only streams.
+- Pick one concrete fusion prototype, preferably `layer_norm + qkv`, before
+  freezing any manifest format.
+
+Validation:
+
+- The fused schedule must show a bounded SPM lifetime for the promoted producer
+  result.
+- The fallback materialization point must be explicit: if fusion cannot be used,
+  the value writes back to Tier 2 cacheable DRAM.
+- The manifest, if introduced, must describe producer/consumer groups, promoted
+  ranges, lifetimes, and fallback points.  It should not duplicate backing
+  placement decisions already handled by `SPMTensorPlacement`.
+
+Only after this validation:
+
+- Extend to attention-style Q/K/V tile residency and softmax hot state.
+- Use the graph manifest as paper evidence for multi-kernel scheduling rather
+  than as a hand-written configuration mechanism.
+
 ## Promotion Model
 
 For each candidate tile/value, build a promotion record:
@@ -207,15 +329,116 @@ what lives in SPM during a scheduled fused region.
 - Do not rely on cache for the data that the compiler can prove is reused inside
   a tight SPM-resident scope.  Cache remains the fallback, not the reuse plan.
 
-## Minimal Milestones
+## Milestones And Validation Gates
 
-1. **Promotion terminology/documentation**: update roadmap and placement docs so
-   Tier placement and SPM promotion are no longer conflated.
+### Gate A: Single-Kernel Promotion Closure
+
+Goal: make promotion a real compiler decision for standalone kernels.
+
+Steps:
+
+1. **Terminology/documentation**: update roadmap and placement docs so Tier
+   placement and SPM promotion are no longer conflated.
 2. **Matmul promotion records**: refactor the existing fused scheduler without
    changing generated behavior.
-3. **LayerNorm row-resident prototype**: opt-in path that copies one row of `x`
-   once and reuses it across mean/variance/normalize.
-4. **Profitability gate**: keep reduction SPM default-off unless row-resident
-   promotion beats cache on 32x64 and 512x1024.
-5. **Fusion promotion plan**: prototype `layer_norm + qkv` or attention-style
-   Q/K/V tile residency once transformer harness exists.
+3. **Promotion evidence**: report promoted bytes, use counts, descriptor counts,
+   and rejected candidates.
+4. **LayerNorm row-resident prototype**: add a separate opt-in path that copies
+   one row of `x` once and reuses it across mean/variance/normalize.
+5. **Single-kernel profitability gate**: keep reduction SPM default-off unless
+   row-resident promotion beats or matches cache on 32x64 and 512x1024.
+6. **Workload breadth**: add at least one more reduction/streaming workload
+   such as softmax and at least one cache-only elementwise/residual workload to
+   show the gate can both promote and reject.
+
+Gate A is complete only when the default policy is automatic for the single
+kernel set: matmul promotes, cache-only elementwise kernels stay clean, and
+LayerNorm/softmax promote only when the row/block-resident strategy is measured
+profitable.
+
+### Gate B: Multi-Kernel / Fusion Promotion
+
+Goal: show that SPM residency is useful across producer-consumer boundaries, not
+just inside one loop nest.
+
+Steps:
+
+1. Build a transformer-facing harness for at least one fused region.
+2. Prototype `layer_norm + qkv` or an attention-style schedule.
+3. Keep the producer result in SPM only when the fused schedule proves bounded
+   lifetime and enough consumer reuse.
+4. Materialize to Tier 2 cacheable DRAM at explicit fallback boundaries.
+5. Compare against cache-only and against single-kernel SPM promotion.
+
+Gate B is complete only when the compiler can explain both the promoted fused
+case and the fallback unfused case.  A hand-only fused schedule is useful for a
+prototype, but the paper story needs the promotion decision and fallback policy
+to be visible in compiler output.
+
+### Gate C: End-To-End Evaluation
+
+Goal: turn the mechanism into a paper-quality system result.
+
+Steps:
+
+1. Run the single-kernel suite with ablations: cache-only, streaming SPM,
+   row/block-resident promotion, Tier 2/3 backing placement, and fused promotion.
+2. Run at least one transformer-facing end-to-end or near end-to-end experiment.
+3. Report not only speedups, but also why the policy avoids slowdowns:
+   rejected candidates, descriptor counts, wait/fence counts, and cache fallback
+   cases.
+4. Include L2-warming/Tier 2 evidence as a CPU-specific result, not as a GPU
+   shared-memory copy.
+5. Prepare artifact scripts so `make verify`, selected compares, and figure
+   generation are reproducible.
+
+Gate C is complete when the evaluation supports the main claim: GPU-style SPM
+promotion needs to be redefined for cache-rich CPUs as a combination of backing
+placement, explicit residency, and conservative profitability gating.
+
+### Paper Gate
+
+The likely paper shape is:
+
+- **Problem**: blindly lowering tiled loads into CPU SPM can lose badly because
+  cache, scalar/vector reuse, DMA descriptor overhead, MMIO stores, and fences
+  change the shared-memory cost model.
+- **Design**: separate backing placement from explicit SPM promotion; keep cache
+  as the default fallback; promote only when bounded reuse is proven.
+- **Implementation**: TriSPM compiler passes, tier sidecar, DMA lowering,
+  promotion records, row/block residency, and fusion promotion.
+- **Evaluation**: single-kernel wins and rejections, multi-kernel/fusion wins,
+  end-to-end transformer-facing result, and ablations.
+
+This is not ready after Gate A alone.  Gate A is enough for a strong
+single-kernel story; Gate B makes it a compiler/scheduling contribution; Gate C
+is the minimum target for a CGO-style submission.
+
+Submission target:
+
+- CGO 2027 Round 1 paper submission is 2026-06-11 AoE.
+- Round 1 should be treated as the aggressive target for a complete Gate C
+  story.  The daily push plan should prioritize runnable evidence over perfect
+  generality.
+- If Gate B is incomplete or the end-to-end result is weak by the internal
+  paper-freeze point, target Round 2 on 2026-09-10 rather than submitting a
+  single-kernel-only paper with an overclaimed story.
+
+Suggested Round 1 sprint:
+
+1. **Week 1**: finish promotion records, evidence export, and no-regression
+   matmul validation.
+2. **Week 2**: implement and measure LayerNorm row-resident promotion; decide
+   whether the default policy can enable it or must keep it opt-in.
+3. **Week 3**: add softmax or another reduction plus cache-only elementwise /
+   residual coverage; close Gate A.
+4. **Week 4**: build the first fusion prototype, preferably `layer_norm + qkv`,
+   with explicit SPM lifetime and Tier 2 fallback.
+5. **Week 5**: run end-to-end or near end-to-end transformer-facing evaluation,
+   ablations, and artifact scripts.
+6. **Final days**: freeze experiments, write the paper, and keep only bug fixes
+   or figure-regeneration changes.
+
+Daily rule: every day should either land runnable compiler/workload support,
+new measurement evidence, or paper/artifact text.  Avoid large speculative
+abstractions that cannot feed one of the three gates before the paper freeze.
