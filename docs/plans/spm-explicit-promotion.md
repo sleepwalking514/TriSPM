@@ -50,8 +50,8 @@ validation gate passes should the next generalization happen.
 D1 status (2026-05-02): **completed**.
 
 D1a and D1b have landed and are validated as metadata-only. D2 row-resident
-reductions may now start. Only the actual cost model and automatic scheduling
-decisions belong to D3.
+reductions have now landed as a separate opt-in prototype. Only the actual cost
+model and automatic scheduling decisions belong to D3.
 
 Completed in D1a:
 
@@ -145,6 +145,8 @@ Only after D1 validation:
 
 ### D2. Keep Row-Resident Reduction Separate From Streaming Reduction
 
+D2 status (2026-05-03): **completed as opt-in prototype; not default-worthy**.
+
 First step:
 
 - Add a new opt-in row-resident lowering before `transformReductionLoop`.
@@ -165,6 +167,28 @@ Initial scope:
 - Require at least two uses of the row before eviction; LayerNorm should expose
   three uses of `x`.
 
+Implemented in D2:
+
+- New pass/backend controls:
+  `enable-row-resident-reductions`,
+  `row-resident-max-bytes`,
+  `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1`, and
+  `TRITON_SPM_ROW_RESIDENT_MAX_BYTES` (default 4096).
+- The row-resident path is separate from the old streaming reduction path.  It
+  matches the current LayerNorm-style trio of top-level loops over the same
+  `x[row, :]`: mean, variance, and normalize.
+- Accepted candidates must use rank-1 contiguous fp32 `x` loads, static loop
+  bounds/step, and a row footprint within the row-resident budget.
+- The lowering emits one row DMA and one wait per program row, then rewrites
+  only the `x` loads in mean/variance/normalize to read from SPM.  `gamma` and
+  `beta` stay on the cache path.
+- `TRITON_ENABLE_SPM_REDUCTIONS=1` still exercises the older streaming
+  reduction coverage path.  If both reduction flags are set, the row-resident
+  path stays separate and the streaming path is not mixed in.
+- The D1 sidecar is reused only as debug/evidence output.  D2 records accepted
+  `LayerNorm x row` promotions and row-resident rejections, but the sidecar does
+  not drive planning, scheduling, `windowK`, buffer layout, or profitability.
+
 Validation:
 
 - `make verify-layer_norm` remains cache path by default.
@@ -175,7 +199,40 @@ Validation:
 - 32x64 and 512x1024 must beat or match the cache baseline before this path can
   become a default policy.
 
-Only after this validation:
+D2 validation results:
+
+- Focused compiler lit:
+  `llvm-lit -v test --filter='convert-memory-to-spm-row-resident|convert-memory-to-spm-promotion-report|convert-memory-to-spm\.mlir'`
+  passed 3/3 tests.
+- Default LayerNorm:
+  `make verify-layer_norm` passed with no SPM LLIR markers and an empty tier
+  sidecar.
+- Old streaming reduction:
+  `make verify-layer_norm ENV='TRITON_ENABLE_SPM_REDUCTIONS=1' EXPECT_SPM=true EXPECT_TIER_JSON=non_empty`
+  passed and still emits non-empty tier evidence for the old path.
+- New row-resident opt-in:
+  `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=true EXPECT_TIER_JSON=empty EXPECT_PROMOTION_SOURCE='LayerNorm x row'`
+  passed.  The promotion sidecar records `accepted_d2_opt_in_row_resident`; the
+  tier sidecar remains `{}`.
+- Both flags together:
+  `TRITON_ENABLE_SPM_REDUCTIONS=1 TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1`
+  still verifies as row-resident evidence with an empty tier sidecar, proving the
+  old streaming coverage path is not mixed into D2.
+- Performance is still cache-favorable.  32x64 measured 10,279 SPM cycles vs
+  6,138 cache cycles (`+67.5%`).  512x1024 measured 1,245,422 SPM cycles vs
+  1,012,922 cache cycles (`+23.0%`).
+
+D2 conclusion:
+
+- The prototype proves the compiler can explicitly promote a whole row and
+  explain the decision without changing the default policy.
+- The prototype must remain opt-in because it does not beat or match cache on
+  the required 32x64 and 512x1024 comparisons.
+- D3 may now start with a conservative profitability/rejection model.  D3 should
+  keep the D1/D2 sidecar as evidence only, not as a planner or scheduling
+  interface.
+
+Only after D3 or later validation:
 
 - Generalize from LayerNorm to softmax or another canonical block-pointer
   reduction.
@@ -349,7 +406,8 @@ This is mostly structural and should preserve current matmul behavior.
 
 ### P1: Row-Resident Reduction Prototype
 
-Add a new opt-in lowering before the streaming reduction path:
+D2 implemented the first version as a new opt-in lowering before the streaming
+reduction path:
 
 ```text
 if reduction row bytes <= budget and x is reused by >=2 loops:
@@ -362,9 +420,10 @@ else:
 This should be a separate experiment from the existing `transformReductionLoop`.
 The existing streaming reduction SPM path has already shown poor performance.
 
-First target: LayerNorm with `N <= 1024` and `BLOCK_N = 8`, where one row is
-small enough but currently creates thousands of tiny DMA transactions across
-three passes.
+First target completed: LayerNorm with `N <= 1024` and `BLOCK_N = 8`.  It emits
+one row DMA per program row and reuses that row across three `x` uses, while
+leaving `gamma` and `beta` cached.  The experiment still loses to cache, so it
+remains opt-in evidence for D3 rather than a default policy.
 
 ### P2: Promotion Profitability Analysis
 
@@ -421,10 +480,13 @@ Steps:
    and rejected candidates.  D1 now exports stable evidence fields and
    structural rejection records. D3 may add measured profitability scores later,
    but it should not turn the D1 evidence sidecar into a planner contract.
-4. **LayerNorm row-resident prototype**: add a separate opt-in path that copies
-   one row of `x` once and reuses it across mean/variance/normalize.
+4. **LayerNorm row-resident prototype**: done in D2 as a separate opt-in path
+   that copies one row of `x` once and reuses it across
+   mean/variance/normalize.
 5. **Single-kernel profitability gate**: keep reduction SPM default-off unless
-   row-resident promotion beats or matches cache on 32x64 and 512x1024.
+   row-resident promotion beats or matches cache on 32x64 and 512x1024. D2 did
+   not meet this bar, so D3 must implement a conservative profitability gate
+   before any default enablement.
 6. ~~**Workload breadth**: add at least one more reduction/streaming workload
    such as softmax and at least one cache-only elementwise/residual workload to
    show the gate can both promote and reject.~~ Done for first smoke coverage
@@ -512,8 +574,9 @@ Suggested Round 1 sprint:
 1. **Week 1**: promotion records, evidence export, and no-regression matmul
    validation are complete as of 2026-05-02. Keep this gate closed unless the
    schema or fused matmul lowering changes again.
-2. **Week 2**: implement and measure LayerNorm row-resident promotion; decide
-   whether the default policy can enable it or must keep it opt-in.
+2. **Week 2**: LayerNorm row-resident promotion is implemented and measured as
+   of 2026-05-03. It must remain opt-in because the required 32x64 and 512x1024
+   comparisons are slower than cache.
 3. **Week 3**: softmax plus cache-only elementwise / residual smoke coverage is
    already landed; use this week to connect those fixtures to the profitability
    gate and any row/block-resident reduction prototype before claiming Gate A.

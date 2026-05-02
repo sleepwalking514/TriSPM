@@ -589,11 +589,20 @@ generated behavior, and the D1 sidecar has a versioned debug/evidence schema
 with structural rejected-candidate records and report tests. A separate DMA
 fence regression was fixed at the same gate by removing the generic inline-asm
 memory clobber; D1b validation kept 64x64x64 SPM-only correctness passing and
-256x256x256 SPM-only at 1,729,209 cycles / 5913 assembly lines. The next
-compiler gate is D2 row-resident reduction promotion. After that, add an
-`SPMPromotionPlanner` concept that records promoted tile shape, scope, use
-count, copy-in/copy-out, SPM footprint, rejected candidates, and profitability.
-See `spm-explicit-promotion.md`.
+256x256x256 SPM-only at 1,729,209 cycles / 5913 assembly lines.
+
+D2 has landed as a separate opt-in row-resident reduction prototype, not as a
+default policy. `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` copies one
+LayerNorm `x[row, :]` into SPM, reuses it across mean, variance, and normalize,
+and keeps `gamma` / `beta` on cache. Default `make verify-layer_norm` still
+proves the cache path; `TRITON_ENABLE_SPM_REDUCTIONS=1` remains the old
+streaming reduction coverage path; the D1 sidecar remains debug/evidence only.
+D2 measurements are still slower than cache (32x64: 10,279 vs 6,138 cycles;
+512x1024: 1,245,422 vs 1,012,922 cycles), so D3 is now the next compiler gate:
+add a conservative `SPMPromotionPlanner` concept that records promoted tile
+shape, scope, use count, copy-in/copy-out, SPM footprint, rejected candidates,
+and profitability before any automatic row/block-resident policy. See
+`spm-explicit-promotion.md`.
 
 First targets:
 
@@ -602,9 +611,11 @@ First targets:
   output and do not yet drive scheduling.
 - Prototype a row-resident LayerNorm path that DMA-copies `x[row, :]` once and
   reuses it across mean, variance, and normalize, instead of streaming 8-float
-  chunks three times.
+  chunks three times.  Done in D2 as opt-in evidence only.
 - Keep reduction SPM default-off unless the promotion path beats cache on the
-  existing 32x64 and 512x1024 comparisons.
+  existing 32x64 and 512x1024 comparisons.  D2 did not meet this bar, so D3
+  must reject it by default until a stronger cost model or schedule changes the
+  measurements.
 
 ### 6c. Expand Workload Coverage [P1]
 

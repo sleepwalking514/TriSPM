@@ -124,6 +124,12 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
     spm_dir = trispm_paths.build_dir(kernel, "spm", tag)
     cache_dir = trispm_paths.build_dir(kernel, "cache", tag)
     expect_spm = bool(manifest["kernel"].get("expect_spm", True))
+    verify_cfg = manifest["kernel"].get("verify", {})
+    expect_tier_json = verify_cfg.get(
+        "expect_tier_json",
+        "non_empty" if expect_spm else "empty",
+    )
+    expect_promotion_source = verify_cfg.get("expect_promotion_source")
 
     checks: list[tuple[str, bool]] = []
     all_ok = True
@@ -137,7 +143,11 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
         if not ok:
             all_ok = False
 
-    print(f"\n===== verify-spm-policy: {kernel} (tag={tag}, expect_spm={expect_spm}) =====")
+    print(
+        f"\n===== verify-spm-policy: {kernel} "
+        f"(tag={tag}, expect_spm={expect_spm}, "
+        f"expect_tier_json={expect_tier_json}) ====="
+    )
 
     # 1. SPM LLIR should match this kernel's expected SPM policy.
     spm_llir = spm_dir / f"{kernel}.llir"
@@ -171,12 +181,33 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
         check("tier json exists", False, str(tier_json))
     else:
         tiers = json.loads(tier_json.read_text())
-        if expect_spm:
+        if expect_tier_json == "non_empty":
             non_empty = len(tiers) > 0
             check("tier json non-empty", non_empty, json.dumps(tiers, separators=(",", ":")))
-        else:
+        elif expect_tier_json == "empty":
             empty = len(tiers) == 0
             check("tier json empty", empty, json.dumps(tiers, separators=(",", ":")))
+        else:
+            check("tier json expectation valid", False, str(expect_tier_json))
+
+    # 3b. Optional promotion evidence sidecar check. This is debug/evidence
+    # only; verify never treats it as placement or scheduling policy.
+    if expect_promotion_source:
+        promotion_json = spm_dir / f"{kernel}_promotions.json"
+        if not promotion_json.is_file():
+            check("promotion json exists", False, str(promotion_json))
+        else:
+            report = json.loads(promotion_json.read_text())
+            sources = [
+                record.get("source")
+                for record in report.get("promotions", [])
+                if record.get("status") == "accepted"
+            ]
+            check(
+                f"promotion source {expect_promotion_source!r}",
+                expect_promotion_source in sources,
+                json.dumps(sources, separators=(",", ":")),
+            )
 
     # 4. Launcher has alloc/free_all
     launcher_c = spm_dir / f"{kernel}_launcher.c"
@@ -248,6 +279,7 @@ def execute_one(
     for run_mode, gem5_flags, should_run in targets:
         target_params = merged_params(manifest, preset, overrides, mode=run_mode)
         env = export_env(manifest, target_params)
+        env.update({k: str(v) for k, v in manifest.get("env", {}).items()})
         if not skip_build:
             do_build(kernel, run_mode, tag, env)
         if should_run:
@@ -272,6 +304,14 @@ def main() -> None:
                    help="override a single param (repeatable)")
     p.add_argument("--sweep", default=None, help="run [sweeps.<name>] from manifest")
     p.add_argument("--skip-build", action="store_true", help="reuse existing build artifacts")
+    p.add_argument("--env", action="append", default=[], metavar="KEY=VAL",
+                   help="export one build/run environment variable (repeatable)")
+    p.add_argument("--expect-spm", choices=("true", "false"), default=None,
+                   help="override [kernel].expect_spm for verify mode")
+    p.add_argument("--expect-tier-json", choices=("empty", "non_empty"), default=None,
+                   help="override verify tier sidecar expectation")
+    p.add_argument("--expect-promotion-source", default=None,
+                   help="require an accepted promotion source in the debug sidecar")
     args = p.parse_args()
 
     manifest = load_manifest(args.kernel)
@@ -281,6 +321,36 @@ def main() -> None:
             sys.exit(f"--set expects KEY=VAL, got {kv!r}")
         k, v = kv.split("=", 1)
         overrides[k] = v
+
+    cli_env: dict[str, str] = {}
+    for kv in args.env:
+        if "=" not in kv:
+            sys.exit(f"--env expects KEY=VAL, got {kv!r}")
+        k, v = kv.split("=", 1)
+        cli_env[k] = v
+
+    if cli_env:
+        manifest = dict(manifest)
+        env_cfg = dict(manifest.get("env", {}))
+        env_cfg.update(cli_env)
+        manifest["env"] = env_cfg
+
+    if (
+        args.expect_spm is not None
+        or args.expect_tier_json is not None
+        or args.expect_promotion_source is not None
+    ):
+        manifest = dict(manifest)
+        kernel_cfg = dict(manifest["kernel"])
+        verify_cfg = dict(kernel_cfg.get("verify", {}))
+        if args.expect_spm is not None:
+            kernel_cfg["expect_spm"] = args.expect_spm == "true"
+        if args.expect_tier_json is not None:
+            verify_cfg["expect_tier_json"] = args.expect_tier_json
+        if args.expect_promotion_source is not None:
+            verify_cfg["expect_promotion_source"] = args.expect_promotion_source
+        kernel_cfg["verify"] = verify_cfg
+        manifest["kernel"] = kernel_cfg
 
     if args.sweep:
         sweep = manifest.get("sweeps", {}).get(args.sweep)

@@ -57,10 +57,16 @@ else
     # cache-only reduction policy separate from opt-in reduction SPM builds.
     # KERNEL_TIER_OVERRIDE affects the generated launcher allocation cases, so
     # tier experiments need separate compile caches as well.
-    if [ "${TRITON_ENABLE_SPM_REDUCTIONS:-0}" = "1" ]; then
+    if [ "${TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS:-0}" = "1" ]; then
+        SPM_CACHE_DIR="${TRITON_CACHE_DIR_SPM_ROW_RESIDENT:-$HOME/.triton/cache_spm_row_resident}"
+    elif [ "${TRITON_ENABLE_SPM_REDUCTIONS:-0}" = "1" ]; then
         SPM_CACHE_DIR="${TRITON_CACHE_DIR_SPM_REDUCE:-$HOME/.triton/cache_spm_reduce}"
     else
         SPM_CACHE_DIR="${TRITON_CACHE_DIR_SPM_NOREDUCE:-$HOME/.triton/cache_spm_noreduce}"
+    fi
+    if [ -n "${TRITON_SPM_ROW_RESIDENT_MAX_BYTES:-}" ]; then
+        ROW_KEY="$(printf '%s' "$TRITON_SPM_ROW_RESIDENT_MAX_BYTES" | tr -cs '[:alnum:]_.-' '_')"
+        SPM_CACHE_DIR="${SPM_CACHE_DIR}_rowbytes_${ROW_KEY}"
     fi
     if [ -n "${KERNEL_TIER_OVERRIDE:-}" ]; then
         TIER_KEY="$(printf '%s' "$KERNEL_TIER_OVERRIDE" | tr -cs '[:alnum:]_.-' '_')"

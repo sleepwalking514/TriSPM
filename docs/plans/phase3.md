@@ -74,6 +74,16 @@ automatically:
   reduction/cache-path rejection coverage, and report-off coverage. This is
   evidence/debug output only; it does not yet make promotion records drive
   scheduling or profitability.
+- Explicit promotion D2 has landed as an opt-in row-resident LayerNorm
+  prototype. `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` enables a separate
+  lowering that copies `x[row, :]` once into SPM, reuses it across mean,
+  variance, and normalize, and leaves `gamma` / `beta` on cache. Default
+  `layer_norm` still verifies as cache path, and the old
+  `TRITON_ENABLE_SPM_REDUCTIONS=1` streaming reduction coverage remains
+  separate. D2 uses the D1 sidecar only as debug/evidence; it does not drive
+  planner, scheduling, buffer layout, `windowK`, or profitability. The measured
+  D2 path is still slower than cache (32x64 +67.5%, 512x1024 +23.0%), so it
+  cannot become a default policy.
 - A no-regression issue found during D1 validation is fixed: DMA fences still
   lower to `fence iorw, iorw`, but no longer carry a generic inline-asm memory
   clobber. The clobber caused the 256x256x256 SPM matmul to regress from the
@@ -150,7 +160,8 @@ The MVP framework is landed. Current workload verification confirms:
   residual elementwise workload.
 - `softmax`: empty tier JSON and no SPM markers by default. Expected for the
   first row-wise smoke workload; future row/block-resident promotion experiments
-  should be opt-in and measured before changing the default.
+  should stay opt-in and measured before changing the default. D2 proved this
+  boundary for LayerNorm but did not produce a cache-beating default policy.
 - `layer_norm`: default `expect_spm = false`, empty tier JSON, and no SPM
   markers. New flushed compares show the SPM-enabled runtime with cache-path
   LayerNorm is effectively equal to cache baseline: 32x64 is -3.6% cycles in
@@ -158,6 +169,10 @@ The MVP framework is landed. Current workload verification confirms:
 - `layer_norm` reduction SPM remains available as opt-in coverage:
   `TRITON_ENABLE_SPM_REDUCTIONS=1` produces Tier 3 args 0,1,2 and SPM markers
   for mean/variance/final normalize. This path is correctness/coverage only.
+- `layer_norm` row-resident promotion is also opt-in:
+  `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` generates SPM markers and a
+  `LayerNorm x row` promotion sidecar while keeping the tier JSON empty. It is
+  evidence for D3, not a default policy.
   Forcing those inputs to Tier 2 cacheable still leaves reduction SPM far
   slower than cache, so the default-off decision is not just a Tier 3
   uncacheable-buffer workaround.

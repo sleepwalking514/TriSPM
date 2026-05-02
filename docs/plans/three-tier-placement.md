@@ -231,6 +231,12 @@ produces `{"0":3,"1":3,"2":3}`, 22 `addrspace(3)` matches, and 78
   （32x64: 1,280 transfers / 40,960 B；512x1024: 327,680 transfers /
   10,485,760 B），所以 blocker 是 reduction SPM lowering 的
   DMA/MMIO/control overhead，而不只是 Tier 3 uncacheable input placement。
+- D2 row-resident LayerNorm 是另一条独立 opt-in promotion path，不是 tier
+  placement path：`TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` 只在
+  `ConvertMemoryToSPM` 内提升 `x[row, :]`，写 D1-schema promotion evidence，
+  并保持 `_tiers.json` 为 `{}`。它证明 tier sidecar 仍只是 backing-placement
+  evidence，不是 promotion scheduler 输入。当前性能仍慢于 cache（32x64
+  +67.5%，512x1024 +23.0%），所以默认策略继续保持 cache path。
 - `vector_add` 不需要 SPM（无 tile reuse），空 JSON 是正确行为。文档中"三个 workload 全部命中 Tier 3"的说法不准确，已修正。
 
 2026-05-02 also added the first transformer-facing smoke workloads.  These are
@@ -332,7 +338,9 @@ Next work:
   reduction 融合后形成有 tile reuse 的 kernel。
 - softmax 的第一版默认也保持 cache path；若要复用
   `transformReductionLoop` 或新的 row/block-resident promotion，必须显式
-  opt in 并记录性能风险。
+  opt in 并记录性能风险。D2 已对 LayerNorm 做过这个分离验证：
+  row-resident promotion 有独立 flag 和 promotion evidence，但不改变默认
+  tier/backing placement，也不能因当前性能结果成为默认策略。
 - 后续扩展：根据 Phase 4/5 transformer driver 的 shape 需求补 attention-like
   presets 或 fused-region harness，而不是把当前 smoke coverage 误解成完整
   attention 支持。
