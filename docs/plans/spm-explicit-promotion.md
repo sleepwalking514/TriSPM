@@ -47,12 +47,11 @@ validation gate passes should the next generalization happen.
 
 ### D1. Start With An Internal Promotion Record, Then Export Evidence
 
-D1 status (2026-05-02): **in progress**.
+D1 status (2026-05-02): **completed**.
 
-D1a has landed and is validated as metadata-only.  D1b remains a blocker before
-D2 row-resident reductions, D3 profitability, or Gate B fusion work starts.
-Do not move D1 holes into later stages; only the actual cost model and automatic
-scheduling decisions belong to D3.
+D1a and D1b have landed and are validated as metadata-only. D2 row-resident
+reductions may now start. Only the actual cost model and automatic scheduling
+decisions belong to D3.
 
 Completed in D1a:
 
@@ -67,6 +66,29 @@ Completed in D1a:
   SPM-only run passes result checking; 256x256x256 SPM-only cycles are
   `1,729,063`, matching the archived `1,729,209` baseline within noise.
 
+Completed in D1b:
+
+- The promotion sidecar now declares `schema_version = 1`,
+  `schema = "triton_cpu_spm_promotion_d1"`, and an explicit debug/evidence
+  contract string. It is not a graph manifest and not a durable IR contract.
+- Accepted records carry `status = "accepted"`, `reason_code`,
+  `reason`, and `field_kinds` that distinguish exact/static fields from
+  D1 structural estimates such as overhead and benefit.
+- Rejected candidate records carry `status = "rejected"`, `pattern`, `source`,
+  `scope`, `shape`, `uses`, `bytes`, `copy_in`, `copy_out`, `reason_code`,
+  `reason`, and field-kind annotations. Current structural reason codes include
+  `policy_disabled`, `unsupported_pattern`, `unsupported_config`,
+  `dynamic_shape_or_stride`, `no_bounded_lifetime`, and
+  `spm_capacity_overflow`.
+- The report test now covers accepted fused matmul records, a rejected default
+  reduction/cache-path candidate, and report-off behavior.
+- Real AOT matmul promotion reports use the new schema after a full compiler
+  rebuild. Cache-baseline builds still do not emit promotion reports.
+- D1b no-regression validation kept generated matmul behavior intact:
+  `make verify-matmul` passes, 64x64x64 SPM-only result check passes, and
+  256x256x256 SPM-only cycles are `1,729,209` with the fast 5913-line assembly
+  shape.
+
 Important finding:
 
 - The observed `~1,987,453` cycle matmul regression was not caused by promotion
@@ -77,34 +99,18 @@ Important finding:
   Removing the clobber restored byte-identical fast assembly while keeping
   `fence iorw, iorw` and volatile MMIO accesses.
 
-D1b blockers to finish before later stages:
-
-- Complete the promotion record schema for D1 fields: `source`, `scope`,
-  `shape`, `uses`, `bytes`, `copy_in`, `copy_out`, and rejection reason.  The
-  sidecar must make it obvious which fields are estimated, exact, accepted, or
-  rejected.
-- Add rejected-candidate records at the D1 level.  D1 rejection reasons should
-  be structural and conservative, such as unsupported pattern, no bounded
-  lifetime, insufficient static use count, SPM capacity overflow, or dynamic
-  shape/stride.  D3 can later attach measured costs and profitability scores.
-- Add lit/unit coverage for the promotion sidecar schema: accepted matmul
-  records, at least one rejected non-profitable/cache-path candidate, and
-  report-off behavior.
-- Keep the generated matmul IR/assembly unchanged while D1b lands.  Re-run the
-  64x64x64 correctness check and 256x256x256 no-regression check after any D1b
-  record/report change that touches the pass.
-- Clarify the JSON sidecar contract for D1: it is a debug/evidence schema with
-  stable field names for paper/artifact scripts, not a graph manifest and not a
-  durable IR contract.
+D1 is now closed. If D1 report fields change again, rerun the same guard set:
+promotion-report lit/FileCheck, `make verify-matmul`, 64x64x64 SPM-only
+correctness, and 256x256x256 SPM-only no-regression.
 
 Not D1 work:
 
 - Promotion records do not need to drive `windowK`, `microM`, buffer layout, or
-  fused matmul lowering before D1 closes.  Those scheduling decisions are D3
-  and later.
+  fused matmul lowering yet. Those scheduling decisions are D3 and later.
 - Row-resident LayerNorm, softmax/block-resident paths, fused
   producer-consumer promotion, and end-to-end experiments are later gates.  They
-  should not start until D1b evidence/reporting is complete.
+  should build on D1 evidence/reporting rather than changing the D1 schema into
+  a planner interface.
 
 Open pitfall:
 
@@ -113,23 +119,24 @@ Open pitfall:
   no-regression check.  If stronger compiler ordering is needed later, make it
   a targeted lowering mode with its own performance gate.
 
-First step:
+Implemented D1 shape:
 
-- Add a pass-local C++ promotion record inside `ConvertMemoryToSPM`.
-- Record `source`, `scope`, `shape`, `uses`, `bytes`, `copy_in`, `copy_out`,
-  and rejection reason.
-- Refactor the existing fused matmul scheduler to populate these records for
-  B-window, A-micro, and accumulator tiles without changing generated IR.
+- `ConvertMemoryToSPM` owns a pass-local C++ promotion report.
+- The report records `source`, `scope`, `shape`, `uses`, `bytes`, `copy_in`,
+  `copy_out`, exact/estimated field kinds, accepted status, and rejection
+  reason codes.
+- The existing fused matmul scheduler populates B-window, A-micro, and
+  accumulator records without changing generated IR.
 
-Validation:
+Validated D1 guard set:
 
-- `make verify-matmul` must produce the same SPM policy as before.
-- Existing matmul compare/sweep points should not regress beyond measurement
-  noise.
-- Debug output or sidecar data must make promoted bytes, use count, and rejected
-  candidates visible.
+- `make verify-matmul` produces the same SPM policy as before.
+- 64x64x64 SPM-only result check passes.
+- 256x256x256 SPM-only stays at the archived ~1.729M-cycle baseline.
+- Debug sidecar data makes promoted bytes, use count, and rejected candidates
+  visible.
 
-Only after all D1a/D1b validation:
+Only after D1 validation:
 
 - Use the records to drive `windowK` selection.
 - Consider making promotion records a more durable IR attribute, JSON sidecar,
@@ -406,15 +413,14 @@ Steps:
 1. **Terminology/documentation**: update roadmap and placement docs so Tier
    placement and SPM promotion are no longer conflated.
 2. **Matmul promotion records**: refactor the existing fused scheduler without
-   changing generated behavior.  D1a is done: the fused matmul scheduler reports
+   changing generated behavior.  Done: the fused matmul scheduler reports
    B-window, A-micro, and accumulator promotion records without changing the
-   generated schedule.  D1b is still open: finish the schema, structural
-   rejected-candidate records, and report tests before moving on.
+   generated schedule; D1b added the versioned schema, structural rejected
+   candidates, report-off coverage, and no-regression validation.
 3. **Promotion evidence**: report promoted bytes, use counts, descriptor counts,
-   and rejected candidates.  Partially done in D1a: existing promoted matmul
-   records are exported.  Still D1b blocker: structural rejected-candidate
-   records and stable evidence fields.  D3 may add measured profitability
-   scores later, but it must not absorb the basic D1 reporting work.
+   and rejected candidates.  D1 now exports stable evidence fields and
+   structural rejection records. D3 may add measured profitability scores later,
+   but it should not turn the D1 evidence sidecar into a planner contract.
 4. **LayerNorm row-resident prototype**: add a separate opt-in path that copies
    one row of `x` once and reuses it across mean/variance/normalize.
 5. **Single-kernel profitability gate**: keep reduction SPM default-off unless
@@ -503,8 +509,9 @@ Submission target:
 
 Suggested Round 1 sprint:
 
-1. **Week 1**: finish promotion records, evidence export, and no-regression
-   matmul validation.
+1. **Week 1**: promotion records, evidence export, and no-regression matmul
+   validation are complete as of 2026-05-02. Keep this gate closed unless the
+   schema or fused matmul lowering changes again.
 2. **Week 2**: implement and measure LayerNorm row-resident promotion; decide
    whether the default policy can enable it or must keep it opt-in.
 3. **Week 3**: softmax plus cache-only elementwise / residual smoke coverage is

@@ -65,17 +65,22 @@ automatically:
   allowing external read-only Q/K/V weights to use Tier 3. This does not yet
   link or run a multi-kernel graph, implement Tier 1, or perform fused
   promotion.
-- Explicit promotion D1 evidence export has landed for matmul. The existing
+- Explicit promotion D1 evidence/reporting has landed for matmul. The existing
   fused scheduler now writes promotion records for the B tile window, A micro
   tile, and accumulator tile when `TRITON_SPM_PROMOTION_REPORT=1` is enabled.
-  This is evidence/debug output only; it does not yet make promotion records
-  drive scheduling or profitability.
+  D1b made the sidecar a versioned debug/evidence schema with accepted/rejected
+  status, structural `reason_code`, exact vs estimated `field_kinds`, an
+  explicit non-durable-contract string, accepted matmul coverage, default
+  reduction/cache-path rejection coverage, and report-off coverage. This is
+  evidence/debug output only; it does not yet make promotion records drive
+  scheduling or profitability.
 - A no-regression issue found during D1 validation is fixed: DMA fences still
   lower to `fence iorw, iorw`, but no longer carry a generic inline-asm memory
   clobber. The clobber caused the 256x256x256 SPM matmul to regress from the
   archived ~1.729M-cycle baseline to ~1.987M cycles by increasing reloads around
   fence sites. After the fix, 64x64x64 SPM-only correctness passes and
-  256x256x256 SPM-only cycles are back at 1,729,063.
+  D1b validation kept 256x256x256 SPM-only cycles at 1,729,209 with the fast
+  5913-line assembly shape.
 
 ### Current State of P3
 

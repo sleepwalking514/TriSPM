@@ -24,17 +24,20 @@ dispatch. It proves that intermediate activations stay Tier 2 while external
 DMA-only weights can be Tier 3. It does not yet link or run a multi-kernel graph,
 implement Tier 1, or perform fused SPM promotion.
 
-Explicit SPM promotion is now in D1, not past it. D1a evidence/export has
-landed: the existing fused matmul scheduler reports B-window, A-micro, and
-accumulator promotion records without changing generated code. During that
-validation we found and fixed an unrelated DMA fence codegen regression: a
-generic inline-asm memory clobber had increased reload pressure and moved
-256x256x256 matmul from the archived ~1.729M-cycle baseline to ~1.987M cycles.
-Removing the clobber restored the baseline while keeping the real
-`fence iorw, iorw` instruction. D1b remains before later stages: finish the
-record schema, structural rejected-candidate records, sidecar/report tests, and
-matmul no-regression validation. Promotion records are still debug/evidence
-output, not yet a scheduler or profitability planner.
+Explicit SPM promotion D1 is now closed. The existing fused matmul scheduler
+reports B-window, A-micro, and accumulator promotion records without changing
+generated code, and the D1 sidecar now has a versioned debug/evidence schema
+with accepted/rejected status, structural rejection reason codes, exact vs
+estimated field annotations, accepted matmul coverage, reduction/cache-path
+rejection coverage, and report-off coverage. During D1 validation we found and
+fixed an unrelated DMA fence codegen regression: a generic inline-asm memory
+clobber had increased reload pressure and moved 256x256x256 matmul from the
+archived ~1.729M-cycle baseline to ~1.987M cycles. Removing the clobber
+restored the baseline while keeping the real `fence iorw, iorw` instruction.
+D1b no-regression validation kept 64x64x64 SPM-only correctness passing and
+256x256x256 SPM-only at 1,729,209 cycles / 5913 assembly lines. Promotion
+records are still debug/evidence output, not yet a scheduler or profitability
+planner.
 
 ## Document Inventory
 
@@ -66,7 +69,8 @@ output, not yet a scheduler or profitability planner.
 | Past | Done | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) P1 | GEMM extra-load matching, reduction multi-load matching, DMA lowering options, and GEMM/reduction bail-out cleanup are complete for the current coverage. |
 | Past | Done | [`plans/phase3.md`](plans/phase3.md) + [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6c | Transformer-facing single-kernel coverage landed for `activation`, `residual_add`, and `softmax`; each builds/verifies as cache path and has flushed ROI smoke compares. |
 | Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
-| Current | High priority | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Next graph work: executable transformer/fusion harnesses, Q/K/V attention-facing shapes, fallback materialization checks, and promotion evidence for fused cases. |
+| Current | Next compiler gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Implement an opt-in row-resident LayerNorm/softmax-style promotion prototype, then measure whether it can beat or match cache before any default policy change. |
+| Current | High priority | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Graph work remains important, but fused producer-consumer promotion should wait until D2/D3 can explain single-kernel promotion and rejection decisions. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |
