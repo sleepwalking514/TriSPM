@@ -66,11 +66,17 @@ else
         TIER_KEY="$(printf '%s' "$KERNEL_TIER_OVERRIDE" | tr -cs '[:alnum:]_.-' '_')"
         SPM_CACHE_DIR="${SPM_CACHE_DIR}_tier_${TIER_KEY}"
     fi
+    if [ "${TRITON_SPM_PROMOTION_REPORT:-0}" = "1" ]; then
+        SPM_CACHE_DIR="${SPM_CACHE_DIR}_promotion_report"
+    fi
     export TRITON_CACHE_DIR="$SPM_CACHE_DIR"
 fi
 
 mkdir -p "$BUILD_DIR"
 export KERNEL_AUX_FILE_DIR="$BUILD_DIR"
+# AOT sidecars are pass side effects, not cached artifacts.  Force compilation
+# so every tag gets matching tier/promotion JSON and launcher allocation cases.
+export TRITON_ALWAYS_COMPILE=1
 
 echo "===== [1/3] Triton kernel → LLVM IR ====="
 python3 "$KERNEL_DIR/kernel.py" 2>"$BUILD_DIR/triton_stderr.log"
