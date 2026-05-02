@@ -1,6 +1,6 @@
 ---
 name: TriSPM Phase 3 Execution Timeline
-overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛并已看到 SPM crossover，但最终 headline 需要 SPM/cache blocking sweep 后再定；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher 和 bail-out cleanup/verification 均已完成。LayerNorm/reduction SPM 现在默认关闭，仅保留 opt-in correctness/coverage 路径。当前主线是 Phase 4 前的 transformer-facing kernel/harness 覆盖、graph-level placement、fused DMA reuse tuning 和 Phase 6 评测扩展。
+overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛并已看到 SPM crossover，但最终 headline 需要 SPM/cache blocking sweep 后再定；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher、bail-out cleanup/verification 和 Phase 4 前 transformer-facing workload smoke coverage 均已完成。LayerNorm/reduction SPM 现在默认关闭，仅保留 opt-in correctness/coverage 路径。当前主线是 graph-level placement、attention/fusion 原型、fused DMA reuse tuning 和 Phase 6 评测扩展。
 tasks:
   - id: p3-profile-overlap
     content: 画清 matmul prefetch enqueue、current buffer 读取、下一轮 dma_wait 成功之间的时间线，确认是否存在真实 overlap。
@@ -59,7 +59,8 @@ tasks:
     status: pending
   - id: transformer-kernel-coverage
     content: 在 Phase 4 attention 前补 transformer-facing 单 kernel/harness 覆盖：activation（GELU/SiLU 或近似）、residual/add 等 cache-path elementwise kernel，以及 softmax 或另一个 reduction/streaming kernel。目标是证明低复用 elementwise 不误进 SPM，并让后续 transformer harness 有可链接的 AOT kernel。
-    status: pending
+    status: completed
+    note: 2026-05-02 完成第一版 workload coverage：新增 `activation`（SiLU）、`residual_add`、row-wise `softmax` 三个 workload，均带 `kernel.py` / `harness.c` / `experiment.toml`、flush-before-ROI、公平 SPM/cache compare、result check 和 manifest-driven `make verify-<kernel>`。验证：`make verify-activation verify-residual_add verify-softmax` 全部 PASS；gem5 smoke compare 分别使用 activation/residual_add `SIZE=128 BLOCK_SIZE=32` 和 softmax `M=4 N=32 BLOCK_N=32`，SPM/cache 两侧均 PASS。
   - id: reuse-rules-backlog
     content: 仅在新 workload 需要时扩展 `three-tier-placement.md` §6.3 的 `has_scalar_reuse` 规则。
     status: pending
@@ -83,7 +84,8 @@ isProject: false
 - `../evidence/l2_warming.md` Tier 2 L2-warming 验证完成（源码分析 + 微基准 2.8× 加速数据）。
 - `phase3-compiler-backlog.md` 里的 P1 稳健性事项已闭环：GEMM >2 loads、reduction matcher 泛化、DMA lowering options、GEMM/reduction bail-out cleanup/verification 均已完成。后续 workload 扩展若出现新 IR 形态再增量补 matcher。
 - `layer_norm` / reduction SPM 是 coverage 成功但性能失败：归档 opt-in compare 下 flushed 32x64、512x1024、1024x1024 均远慢于 cache，noflush 32x64 也仍慢。默认 AOT 已关闭 reduction SPM，使 LayerNorm 回到 cache path；后续新增 softmax 等 reduction workload 时应先默认 cache，再显式 opt-in 评估 SPM。
-- `three-tier-placement.md` §6 是明确 backlog：§6.4 的验证补完已由工具化和 L2-warming evidence 覆盖；§6.2 graph-level placement 是 Phase 5 transformer 前的 P0，§6.1 Tier 1 和 §6.3 reuse 规则扩展按 workload 需求推进。
+- Phase 4 前 transformer-facing workload smoke coverage 已落地：`activation`（SiLU）、`residual_add`、row-wise `softmax` 均可 AOT build、verify cache-path policy、在 gem5 SPM/cache 两种模式下跑 flushed ROI 并 PASS result check。
+- `three-tier-placement.md` §6 是明确 backlog：§6.2 graph-level placement 是 Phase 5 transformer 前的 P0，§6.1 Tier 1 和 §6.3 reuse 规则扩展按 workload 需求推进；§6.2.1 的第一版单 kernel coverage 已完成，后续扩展应围绕 attention/fusion 需要补 shape 或 fused harness。
 
 ## Timeline Reading Order
 
@@ -98,11 +100,12 @@ isProject: false
 5. Done: fix the `transformReductionLoop` 2-D non-leading-IV prefetch address bug.
 6. Done: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) and record the first `layer_norm` SPM coverage/perf baseline.
 7. Done: finish `phase3-compiler-backlog.md` P1 robustness work, including bail-out cleanup/verification.
-8. Current high priority before Phase 4: add transformer-facing single-kernel/harness coverage for cache-path activation/residual elementwise kernels and at least one additional reduction/streaming shape such as softmax.
+8. Done: add transformer-facing single-kernel/harness coverage for cache-path activation/residual elementwise kernels and one additional reduction/streaming shape (`softmax`).
 9. Current high priority for end-to-end transformer work: implement `three-tier-placement.md` §2.1 / §6.2 graph-level conservative placement so intermediate activations remain cacheable and Tier 3 is limited to external read-only DMA-only streaming tensors.
-10. Current optimization line: continue `spm-dma-reuse.md` fused microM-aware scheduler tuning and larger-run validation.
-11. Current blocker to record and later investigate: opt-in reduction SPM performance is far behind cache even though functional coverage passes.
-12. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
+10. Current high priority before a full transformer driver: add attention-facing shape presets / fused-region harnesses that stitch matmul, softmax, residual/add, activation, and layer_norm in the intended order.
+11. Current optimization line: continue `spm-dma-reuse.md` fused microM-aware scheduler tuning and larger-run validation.
+12. Current blocker to record and later investigate: opt-in reduction SPM performance is far behind cache even though functional coverage passes.
+13. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
 
 ## 阶段化执行计划
 

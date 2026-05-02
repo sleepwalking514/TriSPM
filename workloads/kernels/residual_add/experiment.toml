@@ -1,0 +1,28 @@
+[kernel]
+name = "residual_add"
+env_prefix = "RESIDUAL_ADD_"
+tag_template = "n{SIZE}-bs{BLOCK_SIZE}"
+expect_spm = false
+
+[params]
+SIZE = 1024
+BLOCK_SIZE = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+
+[build]
+c_macros = [
+    "SIZE={SIZE}",
+    "BLOCK_SIZE={BLOCK_SIZE}",
+    "RESIDUAL_ADD_WARMUP_ITERS={WARMUP_ITERS}",
+    "RESIDUAL_ADD_MEASURE_ITERS={MEASURE_ITERS}",
+    "RESIDUAL_ADD_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+    "RESIDUAL_ADD_CHECK_RESULT={CHECK_RESULT}",
+]
+
+[presets.steady]
+WARMUP_ITERS = 2
+MEASURE_ITERS = 5
+FLUSH_BEFORE_ROI = 0

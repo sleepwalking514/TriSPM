@@ -252,12 +252,16 @@ At that point, **until this was fixed nothing in Phase 3 was actually exercised 
 
 13. **SPM writeback for output tile** (C tile in GEMM, O tile in attention). Currently the C tile goes through cacheable `vector.transfer_write`. *(Deferred to Phase 4b per plan — not a Phase 3 deliverable, listed here for traceability.)*
 
-14. **Transformer-facing workload coverage before Phase 4 attention.**
-    Add AOT harness/manifest/verify coverage for activation and residual/add
-    cache-path elementwise kernels, plus softmax or another reduction/streaming
-    kernel. Elementwise kernels should usually remain cache-only; this item is
-    about proving build/link/function/placement behavior before the full
-    transformer harness, not about adding an SPM pass for every op.
+14. ~~**Transformer-facing workload coverage before Phase 4 attention.**~~
+    ✅ Done (2026-05-02). Added `activation` (SiLU), `residual_add`, and
+    row-wise `softmax` workloads with AOT kernels, harnesses, manifests,
+    flushed ROI measurement, result checks, and manifest-driven verify policy.
+    `make verify-activation`, `make verify-residual_add`, and
+    `make verify-softmax` all confirm clean cache-path policy by default.
+    Smoke gem5 compares passed in both SPM-enabled and cache-baseline modes
+    (`SIZE=128 BLOCK_SIZE=32` for activation/residual_add; `M=4 N=32
+    BLOCK_N=32` for softmax). This closes the workload/harness coverage item;
+    it does not add a default SPM pass for elementwise or softmax.
 
 ### P2 — Tooling / verification
 

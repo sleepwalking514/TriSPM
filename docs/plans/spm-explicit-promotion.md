@@ -347,9 +347,14 @@ Steps:
    one row of `x` once and reuses it across mean/variance/normalize.
 5. **Single-kernel profitability gate**: keep reduction SPM default-off unless
    row-resident promotion beats or matches cache on 32x64 and 512x1024.
-6. **Workload breadth**: add at least one more reduction/streaming workload
+6. ~~**Workload breadth**: add at least one more reduction/streaming workload
    such as softmax and at least one cache-only elementwise/residual workload to
-   show the gate can both promote and reject.
+   show the gate can both promote and reject.~~ Done for first smoke coverage
+   (2026-05-02): `activation` (SiLU), `residual_add`, and row-wise `softmax`
+   now build, verify as cache path by default, and pass flushed ROI gem5 smoke
+   compares in both SPM-enabled and cache-baseline modes. This supplies the
+   single-kernel rejection/coverage fixtures; it does not complete the
+   profitability gate or row/block-resident promotion work.
 
 Gate A is complete only when the default policy is automatic for the single
 kernel set: matmul promotes, cache-only elementwise kernels stay clean, and
@@ -430,8 +435,9 @@ Suggested Round 1 sprint:
    matmul validation.
 2. **Week 2**: implement and measure LayerNorm row-resident promotion; decide
    whether the default policy can enable it or must keep it opt-in.
-3. **Week 3**: add softmax or another reduction plus cache-only elementwise /
-   residual coverage; close Gate A.
+3. **Week 3**: softmax plus cache-only elementwise / residual smoke coverage is
+   already landed; use this week to connect those fixtures to the profitability
+   gate and any row/block-resident reduction prototype before claiming Gate A.
 4. **Week 4**: build the first fusion prototype, preferably `layer_norm + qkv`,
    with explicit SPM lifetime and Tier 2 fallback.
 5. **Week 5**: run end-to-end or near end-to-end transformer-facing evaluation,

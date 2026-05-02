@@ -606,9 +606,9 @@ that should remain cache-only. Need at least 5 representative kernels:
 |--------|------|-------------|----------|
 | matmul | GEMM | double-buffer / fused micro scheduler ✅ | Done; final headline needs blocking sweep |
 | layer_norm | reduction | cache path by default; opt-in double-buffer coverage | Default fixed; SPM reduction remains performance blocker |
-| activation (GELU/SiLU) | elementwise | cache path expected | P0 before transformer harness; no standalone SPM pass expected |
-| residual_add | elementwise | cache path expected | P0 before transformer harness; verify no accidental SPM |
-| softmax | reduction | cache path by default; opt-in SPM only if measured useful | P1 — add workload and test whether LayerNorm result generalizes |
+| activation (SiLU) | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
+| residual_add | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
+| softmax | reduction | cache path by default; opt-in SPM only if measured useful | Done for row-wise smoke coverage; promotion/perf experiments remain |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | cache path by default | P2 — diversify workload mix |
 

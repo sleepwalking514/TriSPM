@@ -194,7 +194,7 @@
 
 ### 4.1 覆盖审计（2026-04-29，2026-05-02 更新）
 
-`make verify` 重新 build 三个 workload 后的实际结果：
+`make verify` 重新 build the original Phase 3 workload set 后的实际结果：
 
 | workload | `_tiers.json` | LLIR `addrspace(3)` | LLIR `fence iorw` | SPM pass 生效？ |
 |---|---|---|---|---|
@@ -233,6 +233,27 @@ produces `{"0":3,"1":3,"2":3}`, 22 `addrspace(3)` matches, and 78
   DMA/MMIO/control overhead，而不只是 Tier 3 uncacheable input placement。
 - `vector_add` 不需要 SPM（无 tile reuse），空 JSON 是正确行为。文档中"三个 workload 全部命中 Tier 3"的说法不准确，已修正。
 
+2026-05-02 also added the first transformer-facing smoke workloads.  These are
+intentionally cache-path coverage unless a later explicit-promotion experiment
+proves a profitable SPM-resident schedule:
+
+| workload | `_tiers.json` | LLIR `addrspace(3)` | LLIR `fence iorw` | SPM pass 生效？ |
+|---|---|---|---|---|
+| activation | `{}` | 0 | 0 | ❌ SiLU elementwise cache path |
+| residual_add | `{}` | 0 | 0 | ❌ elementwise cache path |
+| softmax | `{}` | 0 | 0 | ❌ default cache path |
+
+Verification:
+
+- `make verify-activation`, `make verify-residual_add`, and `make verify-softmax`
+  all pass the manifest-driven policy checks.
+- gem5 smoke compares pass with flushed ROI and result checking:
+  `activation` and `residual_add` at `SIZE=128 BLOCK_SIZE=32`, and `softmax`
+  at `M=4 N=32 BLOCK_N=32`.
+- `softmax` uses a row-wise block-pointer form and is the intended next
+  reduction/streaming workload for future row/block-resident promotion
+  experiments, but its default manifest remains `expect_spm = false`.
+
 ---
 
 ## 5. 风险与开放问题
@@ -263,17 +284,19 @@ produces `{"0":3,"1":3,"2":3}`, 22 `addrspace(3)` matches, and 78
 - 最小验证 workload：`matmul -> matmul`，确认第一个 matmul 的 C 仍为 cacheable，第二个 matmul 可以从 cacheable C 做 DMA tiling；随后扩展到 `matmul -> residual/layer_norm -> matmul`。
 
 ### 6.2.1 Transformer-facing kernel harness coverage
-- 在 Phase 4 attention 前补齐 AOT harness / manifest / verify 覆盖，而不是等
-  transformer 大 harness 第一次链接时才发现缺口。
+- [🆗] 第一版已完成（2026-05-02）：`activation`（SiLU）、
+  `residual_add`、row-wise `softmax` 均有 AOT harness / manifest / verify
+  覆盖，并能在 SPM-enabled 与 cache-baseline 两种 gem5 模式下通过 flushed
+  ROI smoke compare 和 result check。
 - activation（GELU/SiLU 或近似）和 residual/add 这类 elementwise kernel
   预期保持 cache path；它们不需要单独的 SPM transform，除非未来和 matmul /
   reduction 融合后形成有 tile reuse 的 kernel。
-- softmax 或另一个 canonical block-pointer reduction/streaming kernel 需要
-  单独 smoke coverage。默认应先按 cache path 验证；若要复用
-  `transformReductionLoop`，应显式打开 opt-in reduction SPM 并记录性能风险。
-- 第一版目标：这些 kernel 能 AOT build、cache/SPM 两种模式都功能 PASS；
-  verify 要确认 elementwise 不误命中 SPM、reduction/streaming 默认保守回退，
-  或在显式 opt-in 时按预期命中。
+- softmax 的第一版默认也保持 cache path；若要复用
+  `transformReductionLoop` 或新的 row/block-resident promotion，必须显式
+  opt in 并记录性能风险。
+- 后续扩展：根据 Phase 4/5 transformer driver 的 shape 需求补 attention-like
+  presets 或 fused-region harness，而不是把当前 smoke coverage 误解成完整
+  attention 支持。
 
 ### 6.3 `has_scalar_reuse` 扩展规则 (D4)
 - `vector.extract` 抽出 scalar 后再 broadcast 算 scalar reuse。

@@ -27,8 +27,9 @@ automatically:
   has `vfmacc.vf=256`, `vrgather=0`, `vfmadd.vv=0`, and whole-register
   spill/reload counts matching the cache baseline.
 - The earlier gem5 DMA VA-to-PA page-boundary bug is resolved; `matmul`,
-  `vector_add`, and `layer_norm` pass functionally in both SPM and cache
-  baseline modes.
+  `vector_add`, `layer_norm`, `activation`, `residual_add`, and `softmax`
+  pass functionally in both SPM-enabled and cache-baseline modes for the
+  current smoke coverage.
 - SPM size defaults have been unified to 256 KiB across the current path.
 - Tier sidecar coverage has been audited; `matmul` is the mature real SPM
   workload, while `vector_add` and default `layer_norm` are intentionally
@@ -50,6 +51,12 @@ automatically:
 - Tier 2 L2-warming has been verified by the `dma_l2_warming`
   microbenchmark; the 4K-32K working-set sweep confirms near-100% L2 hits
   after DMA and about 2.8x speedup over the cold scalar-read phase.
+- Transformer-facing workload coverage before Phase 4 attention has landed:
+  `activation` (SiLU), `residual_add`, and row-wise `softmax` now have
+  `kernel.py`, `harness.c`, `experiment.toml`, flushed ROI measurement,
+  result checks, `make verify-<kernel>` policy checks, and SPM-vs-cache smoke
+  compares. These are coverage/harness workloads; they do not add new default
+  SPM promotion policy.
 
 ### Current State of P3
 
@@ -111,6 +118,13 @@ The MVP framework is landed. Current workload verification confirms:
   performance workload.
 - `vector_add`: empty tier JSON. Expected — single-block kernel with no loop,
   no tile reuse. SPM tiling has no benefit here.
+- `activation`: empty tier JSON and no SPM markers. Expected — SiLU
+  elementwise cache-path workload.
+- `residual_add`: empty tier JSON and no SPM markers. Expected — cache-path
+  residual elementwise workload.
+- `softmax`: empty tier JSON and no SPM markers by default. Expected for the
+  first row-wise smoke workload; future row/block-resident promotion experiments
+  should be opt-in and measured before changing the default.
 - `layer_norm`: default `expect_spm = false`, empty tier JSON, and no SPM
   markers. New flushed compares show the SPM-enabled runtime with cache-path
   LayerNorm is effectively equal to cache baseline: 32x64 is -3.6% cycles in
@@ -146,14 +160,10 @@ See `three-tier-placement.md` §4.1 for full analysis.
    multi-load matching, and `DmaOpsToLLVM` MMIO base / future `useXspmInsn`
    options are done. GEMM/reduction bail-out cleanup is also done; lit tests
    cover dynamic-step no-DMA cases and partial prologue cleanup.
-6. Before Phase 4 attention or the transformer pipeline, add transformer-facing
-   single-kernel coverage. At minimum this means harness/manifest/verify
-   coverage for cache-path elementwise kernels used by the block
-   (activation/GELU or SiLU and residual/add), plus at least one next
-   reduction/streaming shape such as softmax. These do not necessarily need
-   SPM transforms; the important thing is to prove that the pass leaves
-   low-reuse elementwise kernels on the cache path and that the workload
-   harness can stitch them into the later transformer driver.
+6. ~~Before Phase 4 attention or the transformer pipeline, add
+   transformer-facing single-kernel coverage.~~ Done (2026-05-02): `activation`
+   (SiLU), `residual_add`, and row-wise `softmax` build, verify clean cache-path
+   policy, run flushed ROI compares, and check results under gem5 in both modes.
 7. Before the transformer pipeline, implement graph-level conservative
    placement (`three-tier-placement.md` §2.1 / §6.2): cacheable activation
    backbone, selective uncacheable streaming inputs, and future Tier-1 hot

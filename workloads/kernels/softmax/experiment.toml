@@ -1,0 +1,30 @@
+[kernel]
+name = "softmax"
+env_prefix = "SOFTMAX_"
+tag_template = "{M}x{N}-bn{BLOCK_N}"
+expect_spm = false
+
+[params]
+M = 32
+N = 64
+BLOCK_N = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+
+[build]
+c_macros = [
+    "M={M}",
+    "N={N}",
+    "BLOCK_N={BLOCK_N}",
+    "SOFTMAX_WARMUP_ITERS={WARMUP_ITERS}",
+    "SOFTMAX_MEASURE_ITERS={MEASURE_ITERS}",
+    "SOFTMAX_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+    "SOFTMAX_CHECK_RESULT={CHECK_RESULT}",
+]
+
+[presets.steady]
+WARMUP_ITERS = 2
+MEASURE_ITERS = 5
+FLUSH_BEFORE_ROI = 0
