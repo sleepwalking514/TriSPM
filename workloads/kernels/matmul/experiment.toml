@@ -17,6 +17,7 @@ env_prefix = "MATMUL_"
 # GROUP_SIZE_M and other tuning knobs stay in [params] only — promote
 # them into the tag if they ever become a sweep axis.
 tag_template = "{M}x{N}x{K}/{BLOCK_SIZE_M}x{BLOCK_SIZE_N}x{BLOCK_SIZE_K}"
+expect_spm = true
 
 [params]
 M = 256

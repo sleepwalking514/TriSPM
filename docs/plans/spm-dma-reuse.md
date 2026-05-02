@@ -15,6 +15,12 @@
 - accumulator 放入 SPM，在 micro-loop 之间保存完整 C tile
 - 保持每个 micro-loop 的寄存器压力为 `microM x BN`
 
+从 2026-05-02 的设计复盘看，这条 fused scheduler 也应视为第一版
+**explicit SPM promotion** prototype：B window 和 accumulator tile 是
+有明确 lifetime/use-count 的 SPM-resident 数据，A micro tile 是短生命周期
+staging。后续通用化计划见
+[`spm-explicit-promotion.md`](spm-explicit-promotion.md)。
+
 ## 当前问题
 
 1024x1024x1024 matmul 在 64x64x32 tile 下：

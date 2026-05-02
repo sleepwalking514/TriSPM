@@ -38,9 +38,9 @@
 - **kernel 行为**：与 Tier 2 一样走 ConvertMemoryToSPM staging。
 - **优势**：DMA 读不污染 cache，纯向量 workload 拿到完整 SPM 收益。
 - **何时赢**：tensor 无 scalar reuse（纯向量消费）。
-- **MVP 状态**：**实现**。`matmul` 命中此 tier（args 0,1 → Tier 3）；
-  `layer_norm` 的输入 `x` 也在 mean/variance block-pointer reduction path
-  中命中 Tier 3。`vector_add` 的 tier JSON 为空——见 §4.1 覆盖审计。
+- **MVP 状态**：**实现**。`matmul` 命中此 tier（args 0,1 → Tier 3）。
+  `layer_norm` 之前在 opt-in reduction path 中也会命中 Tier 3，但默认
+  现已回退 cache path；`vector_add` 的 tier JSON 为空——见 §4.1 覆盖审计。
 
 ### 关于 write-back
 - Tier 1 input：用完即弃，无写回。
@@ -67,6 +67,11 @@
 > 对完整 transformer / 多 kernel pipeline，D5 不能作为长期 tensor-placement 规则直接外推。`no scalar reuse → Tier 3` 只描述当前单 kernel MVP；跨算子时必须按 tensor edge 的 producer/consumer 和后续访问方式重新判定。
 >
 > D7 含义补充：统一 allocator 是**编译期 SPM 地址空间/offset 管理器**，不是把所有 tier 都改成 runtime `spm_malloc`。Tier 1 tensor 才是 resident SPM allocation；Tier 2/3 tensor 仍分别由 `malloc` / `dma_buf_malloc` 分配在 DRAM，只是它们进入 kernel 时使用的 temporary staging buffer 也由 `SPMSpaceManager` 分配 SPM offset。
+>
+> 2026-05-02 设计修正：Tier placement 只回答 tensor 的 **backing
+> allocation** 和跨 kernel 安全性；它不能替代 GPU shared-memory-style 的
+> 显式 SPM promotion/reuse 规划。后者需要独立的 tile/lifetime/schedule
+> 决策，详见 [`spm-explicit-promotion.md`](spm-explicit-promotion.md)。
 
 ### Q1 / Q2 结论（b1 后）
 
@@ -187,34 +192,45 @@
 - [🆗] M7: 三个 workload harness 改造
 - [🆗] M8: IR 验证（每个 workload 的 `.llir` + `_tiers.json` + `_launcher.c`）
 
-### 4.1 覆盖审计（2026-04-29，2026-04-30 更新）
+### 4.1 覆盖审计（2026-04-29，2026-05-02 更新）
 
 `make verify` 重新 build 三个 workload 后的实际结果：
 
 | workload | `_tiers.json` | LLIR `addrspace(3)` | LLIR `fence iorw` | SPM pass 生效？ |
 |---|---|---|---|---|
-| matmul | `{"0":3,"1":3}` | 583 | 80 | ✅ |
-| layer_norm | `{"0":3,"1":3,"2":3}` | 38 | 78 | ✅ mean/variance + final normalize |
+| matmul | `{"0":3,"1":3}` | 574 | 26 | ✅ |
+| layer_norm | `{}` | 0 | 0 | ❌ default cache path |
 | vector_add | `{}` | 0 | 0 | ❌ |
+
+Opt-in coverage remains available:
+`TRITON_ENABLE_SPM_REDUCTIONS=1 python3 scripts/run_experiment.py layer_norm --mode build --tag reduce-32x64`
+produces `{"0":3,"1":3,"2":3}`, 22 `addrspace(3)` matches, and 78
+`fence iorw` matches in the generated LLIR.
 
 **根因分析**：
 
 - **vector_add**：kernel 使用 pointer arithmetic（`x_ptr + offs`），无 `tl.make_block_ptr`。`ConvertMemoryOps` 将其降为 gather-style load，不产生 `vector.transfer_read %memref[%idx]` 的规范形式。此外 vector_add 是单 block 无循环 kernel，没有 `scf.for` 可供 `findTiledLoads` 匹配。**这是设计上的预期行为**——elementwise kernel 无 tile reuse，SPM tiling 无收益。
 - **layer_norm**：mean / variance / final normalize 都已改为
   `tl.make_block_ptr`，并把 `N` 固定为 constexpr，使
-  `ConvertMemoryToSPM` 的静态 loop guard 可以证明边界。该路径现在命中
-  SPM：`make verify-layer_norm` 通过，LLIR 有 38 个 `addrspace(3)` 和
-  78 个 `fence iorw`。最终 normalize pass 的 3 个 load（x, gamma,
-  beta）由 multi-load reduction/streaming matcher 覆盖。
+  `ConvertMemoryToSPM` 的静态 loop guard 可以证明边界。该路径在
+  `TRITON_ENABLE_SPM_REDUCTIONS=1` 时仍命中 SPM，最终 normalize pass 的
+  3 个 load（x, gamma, beta）由 multi-load reduction/streaming matcher
+  覆盖。默认策略关闭 reduction SPM，因为该路径性能远差于 cache。
 
 **结论**：
 
 - `matmul` 是当前成熟的 SPM performance workload，tier sidecar 工作正常。
-- `layer_norm` 现在是 reduction-path SPM coverage workload；`make
-  cmp-layer_norm` 功能 PASS，但 `workloads/m5out/layer_norm/*/compare.txt`
-  显示当前 SPM reduction 性能明显落后 cache。flushed 32x64、512x1024、
-  1024x1024 都很差，noflush 32x64 也仍慢。这条路径目前是
-  correctness/coverage 证据，不是 performance win。
+- `layer_norm` 默认是 cache-path workload；`make cmp-layer_norm` 在
+  SPM-enabled runtime 下不再触发 DMA，32x64 与 512x1024 均和 cache
+  baseline 基本持平。Reduction SPM 只作为 opt-in correctness/coverage
+  证据，不是 performance win。
+- 将 opt-in reduction SPM 的输入强制为 Tier 2 cacheable（
+  `KERNEL_TIER_OVERRIDE=0=2,1=2,2=2`）不能救回性能：32x64 仍是
+  83,845 vs 5,892 cycles（+1323.0%），512x1024 仍是 21,031,983 vs
+  1,010,772 cycles（+1980.8%）。两者都继续产生大量小 DMA
+  （32x64: 1,280 transfers / 40,960 B；512x1024: 327,680 transfers /
+  10,485,760 B），所以 blocker 是 reduction SPM lowering 的
+  DMA/MMIO/control overhead，而不只是 Tier 3 uncacheable input placement。
 - `vector_add` 不需要 SPM（无 tile reuse），空 JSON 是正确行为。文档中"三个 workload 全部命中 Tier 3"的说法不准确，已修正。
 
 ---
@@ -253,11 +269,11 @@
   预期保持 cache path；它们不需要单独的 SPM transform，除非未来和 matmul /
   reduction 融合后形成有 tile reuse 的 kernel。
 - softmax 或另一个 canonical block-pointer reduction/streaming kernel 需要
-  单独 smoke coverage，因为它会复用 `transformReductionLoop`，也能暴露当前
-  reduction 性能 blocker 是否普遍存在。
+  单独 smoke coverage。默认应先按 cache path 验证；若要复用
+  `transformReductionLoop`，应显式打开 opt-in reduction SPM 并记录性能风险。
 - 第一版目标：这些 kernel 能 AOT build、cache/SPM 两种模式都功能 PASS；
-  verify 要确认 elementwise 不误命中 SPM、reduction/streaming 按预期命中或
-  保守回退。
+  verify 要确认 elementwise 不误命中 SPM、reduction/streaming 默认保守回退，
+  或在显式 opt-in 时按预期命中。
 
 ### 6.3 `has_scalar_reuse` 扩展规则 (D4)
 - `vector.extract` 抽出 scalar 后再 broadcast 算 scalar reuse。
@@ -266,5 +282,5 @@
 - 触发条件：当未来引入需要更宽语义的 workload 时再加，避免过早泛化。
 
 ### 6.4 验证补完
-- `make verify-spm-fires` 引入 tier 检查（phase3-compiler-backlog.md §E P2 #14 的延伸）— 已由 `make verify` / `make verify-<kernel>` 覆盖。
+- `make verify-spm-policy` 引入 tier 检查（phase3-compiler-backlog.md §E P2 #14 的延伸）— 已由 `make verify` / `make verify-<kernel>` 覆盖。
 - L2-warming 实验数据点：tier 2 vs cache baseline，要求新写 long-vector + scalar-tail workload — 已由 `../evidence/l2_warming.md` 的 `dma_l2_warming` microbenchmark 覆盖。

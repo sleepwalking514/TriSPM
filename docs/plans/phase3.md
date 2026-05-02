@@ -31,14 +31,17 @@ automatically:
   baseline modes.
 - SPM size defaults have been unified to 256 KiB across the current path.
 - Tier sidecar coverage has been audited; `matmul` is the mature real SPM
-  workload, `vector_add` is intentionally not transformed, and `layer_norm`
-  now enters the SPM path for mean, variance, and final normalize. Final
-  normalize exercises the multi-load reduction/streaming matcher with `x`,
-  `gamma`, and `beta`.
+  workload, while `vector_add` and default `layer_norm` are intentionally
+  cache-path kernels. LayerNorm can still opt into SPM reduction coverage for
+  mean, variance, and final normalize with `TRITON_ENABLE_SPM_REDUCTIONS=1`;
+  final normalize exercises the multi-load reduction/streaming matcher with
+  `x`, `gamma`, and `beta`.
 - Reduction support is not a standalone workload. It is the
   `transformReductionLoop` branch of `ConvertMemoryToSPM`; `layer_norm` is
-  the production workload currently used to exercise it, while
-  `convert-memory-to-spm.mlir` provides the synthetic structural lit coverage.
+  the opt-in production workload used to exercise it, while
+  `convert-memory-to-spm.mlir` provides the synthetic structural lit coverage
+  and verifies that the default reduction-off policy leaves reductions on the
+  cache path.
 - Compiler robustness for the current Phase 3 workload set is closed:
   GEMM matching derives A/B identity from the contract operands, cloned reads
   use `IRMapping`, extra non-dot loads are tolerated, reduction matching accepts
@@ -102,17 +105,22 @@ outputs stay Tier 2 cacheable by default; Tier 3 is reserved for external
 read-only DMA-only streaming inputs/weights; Tier 1 is future SPM-resident hot
 state. See `three-tier-placement.md` §2.1.
 
-The MVP framework is landed. Coverage audit (2026-04-29, `make verify`) confirmed:
+The MVP framework is landed. Current workload verification confirms:
 
-- `matmul`: args 0,1 → Tier 3. LLIR has 583 `addrspace(3)` + 80 `fence iorw`. Working.
-- `vector_add`: empty tier JSON. Expected — single-block kernel with no loop, no tile reuse. SPM tiling has no benefit here.
-- `layer_norm`: args 0,1,2 -> Tier 3 after rewriting all three passes to
-  block pointers with constexpr `N`. LLIR has 38 `addrspace(3)` + 78
-  `fence iorw`; gem5 compare passes functionally.  This verifies production
-  use of `transformReductionLoop` for the two single-load reductions and the
-  final 3-load normalize loop; there is no separate `reduction` workload.
-  This is functional/coverage evidence only: current layer_norm comparisons
-  show the reduction path is still far slower than cache.
+- `matmul`: args 0,1 → Tier 3. LLIR still has SPM markers; it is the
+  performance workload.
+- `vector_add`: empty tier JSON. Expected — single-block kernel with no loop,
+  no tile reuse. SPM tiling has no benefit here.
+- `layer_norm`: default `expect_spm = false`, empty tier JSON, and no SPM
+  markers. New flushed compares show the SPM-enabled runtime with cache-path
+  LayerNorm is effectively equal to cache baseline: 32x64 is -3.6% cycles in
+  the latest run, and 512x1024 is -0.3%.
+- `layer_norm` reduction SPM remains available as opt-in coverage:
+  `TRITON_ENABLE_SPM_REDUCTIONS=1` produces Tier 3 args 0,1,2 and SPM markers
+  for mean/variance/final normalize. This path is correctness/coverage only.
+  Forcing those inputs to Tier 2 cacheable still leaves reduction SPM far
+  slower than cache, so the default-off decision is not just a Tier 3
+  uncacheable-buffer workaround.
 
 See `three-tier-placement.md` §4.1 for full analysis.
 
@@ -123,16 +131,16 @@ See `three-tier-placement.md` §4.1 for full analysis.
    Done (2026-04-30): cacheable DMA, UC DMA, no-DMA scalar baseline,
    per-checkpoint stats, and 4K-32K working-set sweep are recorded in
    `../evidence/l2_warming.md`.
-3. ~~Add Phase 6 tooling: `verify-spm-fires`, unified run/compare targets,
+3. ~~Add Phase 6 tooling: `verify-spm-policy`, unified run/compare targets,
    and a stats CSV parser.~~ Done: `make verify` landed; `make run-<kernel>` / `make cmp-<kernel>` cover unified run/compare targets; `compare_stats.py` extracts metrics to `.txt` and CSV (`--csv` / `--spm-only-csv`). Remaining: Phase 6 comparison tooling.
 4. ~~Upgrade reduction lowering from single-buffer prefetch to true
    double-buffer pipelining after the 2-D address fix.~~ Done: the lit
    test now verifies body-top wait + buffer flip + alternate-buffer
-   prefetch, and `make cmp-layer_norm` passes with real SPM markers.
-   Current `workloads/m5out/layer_norm/*/compare.txt` results make the
-   performance caveat explicit: flushed 32x64, 512x1024, and 1024x1024 runs
-   are much slower than cache, and even the noflush 32x64 run remains slower.
-   Treat this as a reduction-performance blocker, not a speedup result.
+   prefetch, and `TRITON_ENABLE_SPM_REDUCTIONS=1` keeps the real LayerNorm
+   SPM coverage path available. Archived opt-in compares made the performance
+   caveat explicit: flushed 32x64, 512x1024, and 1024x1024 SPM-reduction runs
+   were much slower than cache. Default AOT therefore disables reduction SPM
+   and keeps LayerNorm cache-path.
 5. ~~Finish compiler robustness for current Phase 3 coverage:~~ Done.
    GEMM A/B identity, cloned-read lookup, extra-load tolerance, reduction
    multi-load matching, and `DmaOpsToLLVM` MMIO base / future `useXspmInsn`
@@ -157,6 +165,8 @@ Current expected SPM defaults:
 
 - `TRITON_SPM_BASE=0x40000000`
 - `TRITON_SPM_SIZE=262144` (256 KiB)
+- `TRITON_ENABLE_SPM_REDUCTIONS=0` by default. Set it to `1` only for
+  reduction-path correctness/coverage experiments.
 
 Older notes in this file mentioned 64 KiB. Treat those as obsolete unless a
 specific experiment intentionally overrides the environment.

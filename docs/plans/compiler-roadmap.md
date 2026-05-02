@@ -214,17 +214,16 @@ Current status:
   `compiler/test/TritonCPU/convert-memory-to-spm.mlir`, including the
   reduction body-top wait, buffer select, alternate-buffer enqueue, and
   2-D non-leading-IV address case.
-- Production coverage uses `layer_norm`: its mean and variance passes were
-  rewritten to `tl.make_block_ptr` + `tl.advance`, and its final normalize
-  loop now uses block pointers for `x`, `gamma`, `beta`, and `out`. These
-  lower into the reduction/streaming `transformReductionLoop` pattern.
-  `make verify-layer_norm` checks for `addrspace(3)` / `fence iorw`, and
-  `make cmp-layer_norm` verifies functional correctness on gem5.
-- Performance status is not acceptable yet: current
-  `workloads/m5out/layer_norm/*/compare.txt` runs show SPM layer_norm far
-  slower than cache on flushed 32x64, 512x1024, and 1024x1024 comparisons, and
-  still slower on noflush 32x64. Treat reduction as coverage-complete but
-  performance-blocked.
+- Opt-in production coverage uses `layer_norm`: its mean and variance passes
+  were rewritten to `tl.make_block_ptr` + `tl.advance`, and its final normalize
+  loop now uses block pointers for `x`, `gamma`, `beta`, and `out`. With
+  `TRITON_ENABLE_SPM_REDUCTIONS=1`, these lower into the reduction/streaming
+  `transformReductionLoop` pattern.
+- Performance status is not acceptable for standalone reduction SPM: archived
+  opt-in runs showed SPM LayerNorm far slower than cache on flushed 32x64,
+  512x1024, and 1024x1024 comparisons, and still slower on noflush 32x64.
+  Default AOT therefore leaves reduction/streaming kernels on cache path unless
+  explicitly opted in for coverage/debugging.
 
 ### 3d. Transformer-facing single-kernel coverage before Phase 4
 
@@ -251,6 +250,12 @@ tile reuse.
 ### 3c. Data placement policy
 
 Not all loads benefit from SPM. The pass must classify tensors into placement tiers.
+
+Important distinction: tier placement chooses the tensor's backing allocation
+and graph-safety policy; it is not the full SPM reuse strategy. GPU-style shared
+memory performance requires an explicit promotion/residency planner that chooses
+which tile or temporary lives in SPM, at what scope, and for how many uses. The
+next compiler direction is tracked in `spm-explicit-promotion.md`.
 
 #### Three-tier placement policy
 
@@ -569,25 +574,43 @@ The three-tier placement policy is the paper's most valuable insight. The Tier 2
 
 **This is the only experimental evidence for the core claim "SPM never worse than cache."**
 
+### 6b.1 Explicit SPM Promotion / Residency [P0]
+
+Tier 2 is a safe backing policy, not a replacement for explicit SPM reuse.
+`transformFusedMicroGemmLoop` already demonstrates the right direction by
+keeping a B window and accumulator tile resident in SPM, but that idea is not
+yet a first-class compiler abstraction. Add an `SPMPromotionPlanner` concept
+that records promoted tile shape, scope, use count, copy-in/copy-out, and SPM
+footprint. See `spm-explicit-promotion.md`.
+
+First targets:
+
+- Refactor the existing fused matmul scheduler into explicit promotion records
+  without changing behavior.
+- Prototype a row-resident LayerNorm path that DMA-copies `x[row, :]` once and
+  reuses it across mean, variance, and normalize, instead of streaming 8-float
+  chunks three times.
+- Keep reduction SPM default-off unless the promotion path beats cache on the
+  existing 32x64 and 512x1024 comparisons.
+
 ### 6c. Expand Workload Coverage [P1]
 
-`matmul` is the mature GEMM workload. `layer_norm` now exercises the
-single-load reduction path through its mean/variance passes; it is the current
-production reduction coverage workload rather than a separate synthetic
-`reduction` workload. `vector_add` is intentionally too trivial for SPM
-tiling. Before Phase 4 attention, add transformer-facing harness coverage even
-for kernels that should remain cache-only. Need at least 5 representative
-kernels:
+`matmul` is the mature GEMM workload. `layer_norm` is now the cache-path
+reduction workload by default, with opt-in SPM reduction coverage retained via
+`TRITON_ENABLE_SPM_REDUCTIONS=1`; there is no separate synthetic `reduction`
+workload. `vector_add` is intentionally too trivial for SPM tiling. Before
+Phase 4 attention, add transformer-facing harness coverage even for kernels
+that should remain cache-only. Need at least 5 representative kernels:
 
 | Kernel | Type | SPM Pattern | Priority |
 |--------|------|-------------|----------|
 | matmul | GEMM | double-buffer / fused micro scheduler ✅ | Done; final headline needs blocking sweep |
-| layer_norm | reduction | double-buffer ✅ for mean/variance/final normalize | Coverage done; performance blocker |
+| layer_norm | reduction | cache path by default; opt-in double-buffer coverage | Default fixed; SPM reduction remains performance blocker |
 | activation (GELU/SiLU) | elementwise | cache path expected | P0 before transformer harness; no standalone SPM pass expected |
 | residual_add | elementwise | cache path expected | P0 before transformer harness; verify no accidental SPM |
-| softmax | reduction | double-buffer once canonical block-pointer matcher fires | P1 — add workload and reuse reduction pattern |
+| softmax | reduction | cache path by default; opt-in SPM only if measured useful | P1 — add workload and test whether LayerNorm result generalizes |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
-| cross_entropy | reduction | double-buffer once matcher fires | P2 — diversify workload mix |
+| cross_entropy | reduction | cache path by default | P2 — diversify workload mix |
 
 ### 6d. Performance Breakdown Analysis [P1]
 

@@ -52,6 +52,21 @@ if [ "$MODE" = "cache" ]; then
     # builds collide unless we point them at separate caches.
     export TRITON_CACHE_DIR="${TRITON_CACHE_DIR_NOSPM:-$HOME/.triton/cache_nospm}"
     echo "(SPM pass disabled — cache-baseline build)"
+else
+    # The cache key also omits SPM policy env vars.  Keep the default
+    # cache-only reduction policy separate from opt-in reduction SPM builds.
+    # KERNEL_TIER_OVERRIDE affects the generated launcher allocation cases, so
+    # tier experiments need separate compile caches as well.
+    if [ "${TRITON_ENABLE_SPM_REDUCTIONS:-0}" = "1" ]; then
+        SPM_CACHE_DIR="${TRITON_CACHE_DIR_SPM_REDUCE:-$HOME/.triton/cache_spm_reduce}"
+    else
+        SPM_CACHE_DIR="${TRITON_CACHE_DIR_SPM_NOREDUCE:-$HOME/.triton/cache_spm_noreduce}"
+    fi
+    if [ -n "${KERNEL_TIER_OVERRIDE:-}" ]; then
+        TIER_KEY="$(printf '%s' "$KERNEL_TIER_OVERRIDE" | tr -cs '[:alnum:]_.-' '_')"
+        SPM_CACHE_DIR="${SPM_CACHE_DIR}_tier_${TIER_KEY}"
+    fi
+    export TRITON_CACHE_DIR="$SPM_CACHE_DIR"
 fi
 
 mkdir -p "$BUILD_DIR"

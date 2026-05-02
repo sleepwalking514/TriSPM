@@ -119,10 +119,11 @@ def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
     print(f"SPM-only saved: {rel_workloads_path(spm_only)}")
 
 
-def do_verify(kernel: str, tag: str) -> None:
-    """Check that SPM build has DMA/SPM markers and cache build does not."""
+def do_verify(kernel: str, tag: str, manifest: dict) -> None:
+    """Check SPM/cache LLIR markers against the manifest's expected policy."""
     spm_dir = trispm_paths.build_dir(kernel, "spm", tag)
     cache_dir = trispm_paths.build_dir(kernel, "cache", tag)
+    expect_spm = bool(manifest["kernel"].get("expect_spm", True))
 
     checks: list[tuple[str, bool]] = []
     all_ok = True
@@ -136,9 +137,9 @@ def do_verify(kernel: str, tag: str) -> None:
         if not ok:
             all_ok = False
 
-    print(f"\n===== verify-spm-fires: {kernel} (tag={tag}) =====")
+    print(f"\n===== verify-spm-policy: {kernel} (tag={tag}, expect_spm={expect_spm}) =====")
 
-    # 1. SPM LLIR should contain addrspace(3) and fence iorw
+    # 1. SPM LLIR should match this kernel's expected SPM policy.
     spm_llir = spm_dir / f"{kernel}.llir"
     if not spm_llir.is_file():
         check("spm llir exists", False, str(spm_llir))
@@ -146,8 +147,12 @@ def do_verify(kernel: str, tag: str) -> None:
         text = spm_llir.read_text()
         n_addrspace = len(re.findall(r"addrspace\(3\)", text))
         n_fence = len(re.findall(r"fence iorw", text))
-        check("spm llir has addrspace(3)", n_addrspace > 0, f"count={n_addrspace}")
-        check("spm llir has fence iorw", n_fence > 0, f"count={n_fence}")
+        if expect_spm:
+            check("spm llir has addrspace(3)", n_addrspace > 0, f"count={n_addrspace}")
+            check("spm llir has fence iorw", n_fence > 0, f"count={n_fence}")
+        else:
+            check("spm llir clean of addrspace(3)", n_addrspace == 0, f"count={n_addrspace}")
+            check("spm llir clean of fence iorw", n_fence == 0, f"count={n_fence}")
 
     # 2. Cache LLIR should NOT contain these markers
     cache_llir = cache_dir / f"{kernel}.llir"
@@ -166,8 +171,12 @@ def do_verify(kernel: str, tag: str) -> None:
         check("tier json exists", False, str(tier_json))
     else:
         tiers = json.loads(tier_json.read_text())
-        non_empty = len(tiers) > 0
-        check("tier json non-empty", non_empty, json.dumps(tiers, separators=(",", ":")))
+        if expect_spm:
+            non_empty = len(tiers) > 0
+            check("tier json non-empty", non_empty, json.dumps(tiers, separators=(",", ":")))
+        else:
+            empty = len(tiers) == 0
+            check("tier json empty", empty, json.dumps(tiers, separators=(",", ":")))
 
     # 4. Launcher has alloc/free_all
     launcher_c = spm_dir / f"{kernel}_launcher.c"
@@ -248,7 +257,7 @@ def execute_one(
         do_compare(kernel, tag, int(params.get("MEASURE_ITERS", "1")))
 
     if mode == "verify":
-        ok = do_verify(kernel, tag)
+        ok = do_verify(kernel, tag, manifest)
         if not ok:
             sys.exit(1)
 
