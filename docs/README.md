@@ -39,18 +39,25 @@ D1b no-regression validation kept 64x64x64 SPM-only correctness passing and
 records are still debug/evidence output, not yet a scheduler or profitability
 planner.
 
-Explicit SPM promotion D2 is now closed as an opt-in prototype, not a default
-policy. `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` enables a separate
-row-resident LayerNorm path that DMA-copies `x[row, :]` once, reuses it across
-mean / variance / normalize, and leaves `gamma` / `beta` on the cache path.
-Default `make verify-layer_norm` still proves the cache path; the old
-`TRITON_ENABLE_SPM_REDUCTIONS=1` streaming reduction coverage remains separate.
-D2 uses the D1 promotion sidecar only for debug/evidence (`LayerNorm x row`
-accepted/rejected records) and does not let that sidecar drive planning,
-layout, `windowK`, or profitability. Measured D2 row-resident LayerNorm remains
-slower than cache: 32x64 is 10,279 vs 6,138 cycles (+67.5%), and 512x1024 is
-1,245,422 vs 1,012,922 cycles (+23.0%). The next compiler gate is D3: a
-conservative profitability/rejection model, not default enablement.
+Explicit SPM promotion D2 and D3 are now closed for the current single-kernel
+coverage. D2 added an opt-in row-resident LayerNorm prototype
+(`TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1`) that copies `x[row, :]` once and
+reuses it across mean / variance / normalize while leaving `gamma` / `beta` on
+cache. D3 added a conservative opt-in profitability gate
+(`TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1`) that records static
+descriptor/MMIO/wait/fence/byte/use evidence in the existing D1 debug sidecar
+and rejects current reduction promotion by default. D2 measurements remain
+cache-favorable (32x64: 10,279 vs 6,138 cycles; 512x1024: 1,245,422 vs
+1,012,922 cycles), so no row/block-resident reduction path is default-enabled.
+The sidecar is still evidence only; it is not a planner, scheduler, placement,
+layout, `windowK`, or profitability interface.
+
+Phase 3 single-kernel compiler work is now converged for the current scope:
+matmul is the mature SPM performance path, low-reuse elementwise kernels stay
+cache path, and reduction SPM is either explicit coverage/evidence or rejected
+by D3. The remaining work is no longer "fix Phase 3"; it is Phase 4/5/6 work:
+executable attention/fusion, producer-consumer promotion, and broader
+evaluation.
 
 ## Document Inventory
 
@@ -60,7 +67,7 @@ conservative profitability/rejection model, not default enablement.
 | Current | [`plans/phase3-execution-timeline.md`](plans/phase3-execution-timeline.md) | Ordered execution timeline for Phase 3. Shows completed stages, current stage, and next stages. |
 | Current | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) | Phase 3 compiler audit/closure record: GEMM/reduction robustness is done for the current coverage; output-tile SPM writeback is deferred to Phase 4b. |
 | Current | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) | Three-tier placement design and MVP state: Tier 2/3 plumbing landed; graph-level conservative placement build/verify MVP landed; executable graph harness remains P0. |
-| Current | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) | Next compiler direction: split backing placement from GPU-style SPM promotion/residency. D1 evidence and D2 opt-in row-resident LayerNorm are landed; D3 profitability/rejection policy is next. |
+| Current | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) | Explicit promotion record: D1 evidence, D2 opt-in row-resident LayerNorm, and D3 conservative profitability/rejection policy are landed for current single-kernel coverage. |
 | Current | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | Follow-on fused micro-scheduler DMA reuse plan and first correctness implementation after SplitLargeContract exposed repeated B/A DMA costs. |
 | Roadmap | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) | Full Phase 1-6 compiler roadmap: foundation, Phase 3, attention/multi-kernel work, end-to-end inference, and evaluation. |
 | Evidence | [`evidence/l2_warming.md`](evidence/l2_warming.md) | Completed Tier 2 L2-warming evidence: source verification plus `dma_l2_warming` microbenchmark, 4K-32K sweep, and 2.8x speedup result. |
@@ -83,8 +90,8 @@ conservative profitability/rejection model, not default enablement.
 | Past | Done | [`plans/phase3.md`](plans/phase3.md) + [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6c | Transformer-facing single-kernel coverage landed for `activation`, `residual_add`, and `softmax`; each builds/verifies as cache path and has flushed ROI smoke compares. |
 | Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
 | Current | Done prototype | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion landed and validates separately from both default cache path and old streaming reduction coverage; measurements are still cache-favorable, so it stays opt-in. |
-| Current | Next compiler gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3 | Add a conservative profitability/rejection model before any automatic row/block-resident default policy. |
-| Current | High priority | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Graph work remains important, but fused producer-consumer promotion should wait until D3 can explain single-kernel promotion and rejection decisions. |
+| Current | Done gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3 | Conservative profitability/rejection model landed: accepts existing fused matmul evidence, rejects current streaming/row-resident LayerNorm reductions, and keeps default reduction path on cache. |
+| Current | Next compiler gate | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Move to executable attention/fusion and producer-consumer promotion; single-kernel D1-D3 promotion/rejection groundwork is closed for current coverage. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |

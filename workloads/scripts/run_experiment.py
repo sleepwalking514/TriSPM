@@ -130,6 +130,7 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
         "non_empty" if expect_spm else "empty",
     )
     expect_promotion_source = verify_cfg.get("expect_promotion_source")
+    expect_rejection_reason = verify_cfg.get("expect_rejection_reason")
 
     checks: list[tuple[str, bool]] = []
     all_ok = True
@@ -207,6 +208,22 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
                 f"promotion source {expect_promotion_source!r}",
                 expect_promotion_source in sources,
                 json.dumps(sources, separators=(",", ":")),
+            )
+    if expect_rejection_reason:
+        promotion_json = spm_dir / f"{kernel}_promotions.json"
+        if not promotion_json.is_file():
+            check("promotion json exists", False, str(promotion_json))
+        else:
+            report = json.loads(promotion_json.read_text())
+            reasons = [
+                record.get("reason_code")
+                for record in report.get("rejections", [])
+                if record.get("status") == "rejected"
+            ]
+            check(
+                f"rejection reason {expect_rejection_reason!r}",
+                expect_rejection_reason in reasons,
+                json.dumps(reasons, separators=(",", ":")),
             )
 
     # 4. Launcher has alloc/free_all
@@ -312,6 +329,8 @@ def main() -> None:
                    help="override verify tier sidecar expectation")
     p.add_argument("--expect-promotion-source", default=None,
                    help="require an accepted promotion source in the debug sidecar")
+    p.add_argument("--expect-rejection-reason", default=None,
+                   help="require a rejected promotion reason_code in the debug sidecar")
     args = p.parse_args()
 
     manifest = load_manifest(args.kernel)
@@ -339,6 +358,7 @@ def main() -> None:
         args.expect_spm is not None
         or args.expect_tier_json is not None
         or args.expect_promotion_source is not None
+        or args.expect_rejection_reason is not None
     ):
         manifest = dict(manifest)
         kernel_cfg = dict(manifest["kernel"])
@@ -349,6 +369,8 @@ def main() -> None:
             verify_cfg["expect_tier_json"] = args.expect_tier_json
         if args.expect_promotion_source is not None:
             verify_cfg["expect_promotion_source"] = args.expect_promotion_source
+        if args.expect_rejection_reason is not None:
+            verify_cfg["expect_rejection_reason"] = args.expect_rejection_reason
         kernel_cfg["verify"] = verify_cfg
         manifest["kernel"] = kernel_cfg
 

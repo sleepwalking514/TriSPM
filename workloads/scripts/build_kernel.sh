@@ -68,6 +68,9 @@ else
         ROW_KEY="$(printf '%s' "$TRITON_SPM_ROW_RESIDENT_MAX_BYTES" | tr -cs '[:alnum:]_.-' '_')"
         SPM_CACHE_DIR="${SPM_CACHE_DIR}_rowbytes_${ROW_KEY}"
     fi
+    if [ "${TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY:-0}" = "1" ]; then
+        SPM_CACHE_DIR="${SPM_CACHE_DIR}_promotion_profitability"
+    fi
     if [ -n "${KERNEL_TIER_OVERRIDE:-}" ]; then
         TIER_KEY="$(printf '%s' "$KERNEL_TIER_OVERRIDE" | tr -cs '[:alnum:]_.-' '_')"
         SPM_CACHE_DIR="${SPM_CACHE_DIR}_tier_${TIER_KEY}"

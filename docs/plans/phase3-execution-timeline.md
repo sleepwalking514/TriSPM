@@ -1,6 +1,6 @@
 ---
 name: TriSPM Phase 3 Execution Timeline
-overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛并已看到 SPM crossover，但最终 headline 需要 SPM/cache blocking sweep 后再定；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher、bail-out cleanup/verification、Phase 4 前 transformer-facing workload smoke coverage、graph-level conservative placement build/verify MVP、explicit promotion D1 evidence/reporting 和 D2 row-resident reduction opt-in prototype 均已完成。LayerNorm/reduction SPM 现在默认关闭，仅保留 opt-in correctness/coverage/evidence 路径。当前主线是 D3 conservative promotion profitability/rejection model、attention/fusion 可执行原型、fused DMA reuse tuning 和 Phase 6 评测扩展。
+overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛并已看到 SPM crossover，但最终 headline 需要 SPM/cache blocking sweep 后再定；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher、bail-out cleanup/verification、Phase 4 前 transformer-facing workload smoke coverage、graph-level conservative placement build/verify MVP、explicit promotion D1 evidence/reporting、D2 row-resident reduction opt-in prototype 和 D3 conservative profitability/rejection gate 均已完成。LayerNorm/reduction SPM 现在默认关闭，仅保留 opt-in correctness/coverage/evidence 路径。当前主线是 attention/fusion 可执行原型、producer-consumer promotion、fused DMA reuse tuning 和 Phase 6 评测扩展。
 tasks:
   - id: explicit-promotion-d1
     priority: high
@@ -11,7 +11,12 @@ tasks:
     priority: high
     content: 实现一个和旧 streaming reduction 分离的 opt-in row-resident LayerNorm prototype：每个 program row 只 DMA `x[row, :]` 一次，mean/variance/normalize 三次复用，默认 layer_norm 和旧 `TRITON_ENABLE_SPM_REDUCTIONS=1` coverage 均不能被混入。
     status: completed
-    note: 2026-05-03 D2 完成。新增 `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` / `enable-row-resident-reductions` 和 `TRITON_SPM_ROW_RESIDENT_MAX_BYTES` / `row-resident-max-bytes`；backend 在 row-resident flag 打开时不把旧 streaming reduction tier sidecar 混进来。验证覆盖：默认 `make verify-layer_norm` 仍无 SPM marker 且 tier JSON `{}`；旧 `TRITON_ENABLE_SPM_REDUCTIONS=1` 仍命中 streaming coverage 且 tier JSON non-empty；row-resident opt-in 会生成 SPM marker、tier JSON `{}`、promotion sidecar accepted source `LayerNorm x row`；两个 flag 同时打开时仍走 row-resident evidence 且 tier JSON `{}`。性能仍不达标：32x64 为 10,279 vs 6,138 cycles（+67.5%），512x1024 为 1,245,422 vs 1,012,922 cycles（+23.0%）。D1 sidecar 在 D2 只记录 accepted/rejected evidence，不驱动 planner、调度、`windowK`、buffer layout 或 profitability；下一步进入 D3 conservative profitability/rejection model。
+    note: 2026-05-03 D2 完成。新增 `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` / `enable-row-resident-reductions` 和 `TRITON_SPM_ROW_RESIDENT_MAX_BYTES` / `row-resident-max-bytes`；backend 在 row-resident flag 打开时不把旧 streaming reduction tier sidecar 混进来。验证覆盖：默认 `make verify-layer_norm` 仍无 SPM marker 且 tier JSON `{}`；旧 `TRITON_ENABLE_SPM_REDUCTIONS=1` 仍命中 streaming coverage 且 tier JSON non-empty；row-resident opt-in 会生成 SPM marker、tier JSON `{}`、promotion sidecar accepted source `LayerNorm x row`；两个 flag 同时打开时仍走 row-resident evidence 且 tier JSON `{}`。性能仍不达标：32x64 为 10,279 vs 6,138 cycles（+67.5%），512x1024 为 1,245,422 vs 1,012,922 cycles（+23.0%）。D1 sidecar 在 D2 只记录 accepted/rejected evidence，不驱动 planner、调度、`windowK`、buffer layout 或 profitability；D3 已补上 conservative profitability/rejection model。
+  - id: explicit-promotion-d3
+    priority: high
+    content: 为 explicit SPM promotion 加一个 conservative static profitability/rejection gate：记录 descriptor/MMIO/wait/fence/bytes/uses evidence，接受现有 fused matmul promotion evidence，拒绝当前 streaming/row-resident LayerNorm reduction，且不把 D1 sidecar 升级成 planner 接口。
+    status: completed
+    note: 2026-05-03 D3 完成。新增 `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` / `enable-promotion-profitability`；profitability evidence 写入 D1 debug sidecar 的 `profitability` 字段，但 compiler 不读回该 sidecar，不驱动 `windowK`、placement、buffer layout 或调度。lit 覆盖 fused matmul accept evidence、streaming reduction rejection、row-resident rejection。workload 验证：默认 `make verify-layer_norm` 仍 cache path；D2 row-resident opt-in 在 D3 gate 关闭时仍可 promotion；D3 gate 打开时 row-resident LayerNorm 被 `insufficient_row_work` 拒绝且 LLIR/tier JSON 保持 clean；旧 streaming reduction 被 `streaming_reduction_no_residency` 拒绝且 tier JSON `{}`。当前 single-kernel D1-D3 promotion/rejection groundwork 可视为收敛；下一步转向 Gate B attention/fusion 和 producer-consumer promotion。
   - id: p3-profile-overlap
     content: 画清 matmul prefetch enqueue、current buffer 读取、下一轮 dma_wait 成功之间的时间线，确认是否存在真实 overlap。
     status: completed
@@ -107,6 +112,12 @@ isProject: false
   `TRITON_ENABLE_SPM_REDUCTIONS=1` streaming coverage 仍独立存在。D2 性能
   仍慢于 cache（32x64 +67.5%，512x1024 +23.0%），所以不能默认启用；下一步
   是 D3 的 conservative profitability/rejection model。
+- Explicit promotion D3 已完成 conservative static gate：
+  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` 会记录 descriptor/MMIO/wait/
+  fence/bytes/uses evidence，接受现有 fused matmul promotion evidence，并拒绝
+  当前 streaming/row-resident LayerNorm reduction；rejected reduction 不会留下
+  SPM LLIR marker 或非空 tier JSON。D1 sidecar 仍是 debug/evidence，不是 planner
+  或调度接口。
 
 ## Timeline Reading Order
 
@@ -124,10 +135,11 @@ isProject: false
 8. Done: add transformer-facing single-kernel/harness coverage for cache-path activation/residual elementwise kernels and one additional reduction/streaming shape (`softmax`).
 9. Done: implement the graph-level conservative placement build/verify MVP. `workloads/scripts/graph_placement.py` consumes a graph manifest, generates per-node `KERNEL_TIER_OVERRIDE`, builds SPM artifacts, and verifies launcher allocation dispatch without touching promotion lowering.
 10. Done: implement D2 opt-in row-resident LayerNorm promotion and verify it stays separate from both the default cache path and old streaming reduction coverage.
-11. Current high priority before a full transformer driver: add D3 conservative promotion profitability/rejection logic, then executable attention/fusion harnesses that stitch matmul, softmax, residual/add, activation, and layer_norm in the intended order and compare against cache-only baselines.
-12. Current optimization line: continue `spm-dma-reuse.md` fused microM-aware scheduler tuning and larger-run validation.
-13. Current blocker to record and later investigate: opt-in streaming and row-resident reduction SPM performance are both behind cache even though functional coverage passes.
-14. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
+11. Done: implement D3 conservative promotion profitability/rejection logic for current single-kernel coverage.
+12. Current high priority before a full transformer driver: add executable attention/fusion harnesses that stitch matmul, softmax, residual/add, activation, and layer_norm in the intended order and compare against cache-only baselines.
+13. Current optimization line: continue `spm-dma-reuse.md` fused microM-aware scheduler tuning and larger-run validation.
+14. Current blocker to record and later investigate: opt-in streaming and row-resident reduction SPM performance are both behind cache even though functional coverage passes; D3 now rejects them by policy.
+15. Later: enter `three-tier-placement.md` §6.1 for Tier 1 resident SPM and §6.3 for workload-driven scalar-reuse rule expansion.
 
 ## 阶段化执行计划
 

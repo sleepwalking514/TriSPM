@@ -84,6 +84,14 @@ automatically:
   planner, scheduling, buffer layout, `windowK`, or profitability. The measured
   D2 path is still slower than cache (32x64 +67.5%, 512x1024 +23.0%), so it
   cannot become a default policy.
+- Explicit promotion D3 has landed as a conservative opt-in profitability gate.
+  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
+  descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the
+  existing fused matmul B-window / accumulator evidence, and rejects current
+  streaming or row-resident LayerNorm reductions.  Rejected reductions stay on
+  the cache path and keep the tier sidecar empty.  The sidecar remains
+  debug/evidence only; it is not read back by planning, placement, scheduling,
+  `windowK`, or buffer-layout code.
 - A no-regression issue found during D1 validation is fixed: DMA fences still
   lower to `fence iorw, iorw`, but no longer carry a generic inline-asm memory
   clobber. The clobber caused the 256x256x256 SPM matmul to regress from the
@@ -93,6 +101,10 @@ automatically:
   5913-line assembly shape.
 
 ### Current State of P3
+
+Phase 3 is converged for the current single-kernel compiler scope.  The
+remaining items belong to Phase 4/5/6: executable graph/attention/fusion,
+producer-consumer promotion, broader evaluation, and final blocking sweeps.
 
 `matmul` is functionally correct, has the right compute shape, and has crossed
 over under the cold-start P3 headline metric. SPM beats the cache baseline on
@@ -172,7 +184,10 @@ The MVP framework is landed. Current workload verification confirms:
 - `layer_norm` row-resident promotion is also opt-in:
   `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` generates SPM markers and a
   `LayerNorm x row` promotion sidecar while keeping the tier JSON empty. It is
-  evidence for D3, not a default policy.
+  experiment evidence, not a default policy. With
+  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1`, D3 rejects the current
+  row-resident LayerNorm candidate before lowering and keeps LLIR/tier sidecars
+  clean.
   Forcing those inputs to Tier 2 cacheable still leaves reduction SPM far
   slower than cache, so the default-off decision is not just a Tier 3
   uncacheable-buffer workaround.

@@ -598,10 +598,13 @@ and keeps `gamma` / `beta` on cache. Default `make verify-layer_norm` still
 proves the cache path; `TRITON_ENABLE_SPM_REDUCTIONS=1` remains the old
 streaming reduction coverage path; the D1 sidecar remains debug/evidence only.
 D2 measurements are still slower than cache (32x64: 10,279 vs 6,138 cycles;
-512x1024: 1,245,422 vs 1,012,922 cycles), so D3 is now the next compiler gate:
-add a conservative `SPMPromotionPlanner` concept that records promoted tile
-shape, scope, use count, copy-in/copy-out, SPM footprint, rejected candidates,
-and profitability before any automatic row/block-resident policy. See
+512x1024: 1,245,422 vs 1,012,922 cycles). D3 has now landed the conservative
+static promotion/rejection gate for current single-kernel coverage:
+`TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records descriptor/MMIO/wait/fence
+and byte/use evidence in the D1 debug sidecar, accepts the existing fused matmul
+B-window / accumulator evidence, and rejects current streaming or row-resident
+LayerNorm reduction promotion while keeping tier placement clean. This is still
+evidence and policy plumbing, not a default row/block-resident enablement. See
 `spm-explicit-promotion.md`.
 
 First targets:
@@ -615,7 +618,8 @@ First targets:
 - Keep reduction SPM default-off unless the promotion path beats cache on the
   existing 32x64 and 512x1024 comparisons.  D2 did not meet this bar, so D3
   must reject it by default until a stronger cost model or schedule changes the
-  measurements.
+  measurements.  Done in D3 for current LayerNorm streaming and row-resident
+  candidates.
 
 ### 6c. Expand Workload Coverage [P1]
 

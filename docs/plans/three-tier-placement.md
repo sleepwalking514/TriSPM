@@ -237,6 +237,11 @@ produces `{"0":3,"1":3,"2":3}`, 22 `addrspace(3)` matches, and 78
   并保持 `_tiers.json` 为 `{}`。它证明 tier sidecar 仍只是 backing-placement
   evidence，不是 promotion scheduler 输入。当前性能仍慢于 cache（32x64
   +67.5%，512x1024 +23.0%），所以默认策略继续保持 cache path。
+- D3 profitability gate 继续守住这个边界：
+  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` 拒绝当前 streaming 和
+  row-resident LayerNorm reduction 时，LLIR 保持无 SPM marker，`_tiers.json`
+  也保持 `{}`。Promotion profitability evidence 仍写在 promotion sidecar，
+  不进入 tier/backing placement 接口。
 - `vector_add` 不需要 SPM（无 tile reuse），空 JSON 是正确行为。文档中"三个 workload 全部命中 Tier 3"的说法不准确，已修正。
 
 2026-05-02 also added the first transformer-facing smoke workloads.  These are
@@ -340,7 +345,8 @@ Next work:
   `transformReductionLoop` 或新的 row/block-resident promotion，必须显式
   opt in 并记录性能风险。D2 已对 LayerNorm 做过这个分离验证：
   row-resident promotion 有独立 flag 和 promotion evidence，但不改变默认
-  tier/backing placement，也不能因当前性能结果成为默认策略。
+  tier/backing placement，也不能因当前性能结果成为默认策略。D3 已补上
+  conservative rejection gate；未来 softmax promotion 也应先通过同类 gate。
 - 后续扩展：根据 Phase 4/5 transformer driver 的 shape 需求补 attention-like
   presets 或 fused-region harness，而不是把当前 smoke coverage 误解成完整
   attention 支持。

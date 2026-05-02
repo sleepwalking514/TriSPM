@@ -240,6 +240,9 @@ Only after D3 or later validation:
 
 ### D3. Use A Conservative Profitability Gate Before Default Promotion
 
+D3 status (2026-05-03): **completed as a conservative opt-in policy/evidence
+gate; no default promotion enabled**.
+
 First step:
 
 - Implement static guards first: static access pattern, bounded lifetime,
@@ -249,6 +252,34 @@ First step:
 - If the model cannot prove reuse and bounded overhead, leave the operation on
   the cache path.
 
+Implemented in D3:
+
+- New explicit control:
+  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` /
+  `enable-promotion-profitability`.
+- The model is deterministic and static.  It records `dma_descriptors`,
+  `mmio_stores`, `waits`, `fences`, `copy_bytes`,
+  `avoided_repeated_read_bytes`, `live_spm_bytes`, and `uses` in a
+  `profitability` object inside the existing D1 debug/evidence sidecar.
+- D3 keeps the sidecar as evidence only.  It is not read back by the compiler,
+  planner, placement pass, launcher generation, `windowK` selection, or buffer
+  layout.
+- With D3 profitability enabled, streaming reductions are rejected with
+  `streaming_reduction_no_residency`: each chunk has one compute use and no
+  bounded SPM lifetime.  The old `TRITON_ENABLE_SPM_REDUCTIONS=1` coverage path
+  remains available when D3 profitability is off.
+- With D3 profitability enabled, the D2 row-resident LayerNorm prototype is
+  rejected before lowering on current shapes.  32x64 reports
+  `insufficient_row_work`; 512x1024 falls under the measured D2 regression
+  guard.  The row-resident D2 opt-in path remains available when D3
+  profitability is off.
+- Existing fused matmul promotion records get D3 accept evidence for the
+  already-performing cases: B window as `accepted_reused_loop_window` and
+  accumulator tile as `accepted_bounded_temporary`.
+- Backend placement now keeps reduction tier sidecars empty when D3 rejects a
+  reduction path, so rejected candidates do not leave a Tier 3 backing-placement
+  artifact behind.
+
 Validation:
 
 - The model must reject the current tiny-chunk streaming LayerNorm SPM path by
@@ -257,6 +288,36 @@ Validation:
   perform well.
 - The model must explain decisions in debug output so failed experiments are
   diagnosable without reading generated IR by hand.
+
+D3 validation results:
+
+- Focused compiler lit:
+  `llvm-lit -v test --filter='convert-memory-to-spm-row-resident|convert-memory-to-spm-promotion-report|convert-memory-to-spm\.mlir'`
+  passed 3/3 tests.
+- Default LayerNorm remains cache path:
+  `make verify-layer_norm` passed with no SPM LLIR markers and an empty tier
+  sidecar.
+- D2 row-resident opt-in still works when D3 profitability is off:
+  `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=true EXPECT_TIER_JSON=empty EXPECT_PROMOTION_SOURCE='LayerNorm x row'`
+  passed.
+- D3 rejects row-resident LayerNorm:
+  `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=false EXPECT_TIER_JSON=empty EXPECT_REJECTION_REASON='insufficient_row_work'`
+  passed.
+- D3 rejects old streaming reduction and keeps placement clean:
+  `make verify-layer_norm ENV='TRITON_ENABLE_SPM_REDUCTIONS=1 TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=false EXPECT_TIER_JSON=empty EXPECT_REJECTION_REASON='streaming_reduction_no_residency'`
+  passed.
+
+D3 conclusion:
+
+- The compiler now has a conservative single-kernel promotion/rejection gate
+  that explains both accepted fused matmul evidence and rejected reduction
+  candidates.
+- No row/block-resident reduction path is default-enabled.  Reduction SPM
+  remains explicit opt-in coverage or evidence only.
+- Gate A is structurally closed for the current single-kernel set: matmul has
+  accepted promotion evidence, cache-only elementwise kernels stay clean, and
+  reduction candidates are rejected unless explicitly bypassing the D3 gate for
+  experiments.
 
 Only after this validation:
 
@@ -437,6 +498,10 @@ Add a conservative cost model:
 
 If the model cannot prove reuse, do not promote.
 
+D3 landed the first static version of this model for the current single-kernel
+set.  It is deliberately conservative and rejection-heavy; fitting constants
+from gem5 stats is still later work.
+
 ### P2: Graph/Fusion Promotion
 
 For transformer work, add a graph-level promotion manifest that can describe:
@@ -486,7 +551,9 @@ Steps:
 5. **Single-kernel profitability gate**: keep reduction SPM default-off unless
    row-resident promotion beats or matches cache on 32x64 and 512x1024. D2 did
    not meet this bar, so D3 must implement a conservative profitability gate
-   before any default enablement.
+   before any default enablement. Done in D3: current streaming and
+   row-resident LayerNorm candidates are rejected by the static gate, while the
+   existing fused matmul schedule receives accept evidence.
 6. ~~**Workload breadth**: add at least one more reduction/streaming workload
    such as softmax and at least one cache-only elementwise/residual workload to
    show the gate can both promote and reject.~~ Done for first smoke coverage
@@ -500,6 +567,11 @@ Gate A is complete only when the default policy is automatic for the single
 kernel set: matmul promotes, cache-only elementwise kernels stay clean, and
 LayerNorm/softmax promote only when the row/block-resident strategy is measured
 profitable.
+
+As of D3, Gate A is structurally closed for the current coverage but not a
+claim that LayerNorm/softmax SPM should be enabled: the automatic policy is
+conservative, so reductions remain cache path unless a future measured schedule
+beats the gate.
 
 ### Gate B: Multi-Kernel / Fusion Promotion
 
@@ -578,8 +650,10 @@ Suggested Round 1 sprint:
    of 2026-05-03. It must remain opt-in because the required 32x64 and 512x1024
    comparisons are slower than cache.
 3. **Week 3**: softmax plus cache-only elementwise / residual smoke coverage is
-   already landed; use this week to connect those fixtures to the profitability
-   gate and any row/block-resident reduction prototype before claiming Gate A.
+   already landed; D3 connected the current reduction fixtures to the
+   profitability gate by rejecting streaming and row-resident LayerNorm while
+   preserving D2 opt-in experiments.  Softmax-specific row/block residency
+   remains later measured work.
 4. **Week 4**: build the first fusion prototype, preferably `layer_norm + qkv`,
    with explicit SPM lifetime and Tier 2 fallback.
 5. **Week 5**: run end-to-end or near end-to-end transformer-facing evaluation,
