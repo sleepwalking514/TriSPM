@@ -24,6 +24,18 @@ dispatch. It proves that intermediate activations stay Tier 2 while external
 DMA-only weights can be Tier 3. It does not yet link or run a multi-kernel graph,
 implement Tier 1, or perform fused SPM promotion.
 
+Explicit SPM promotion is now in D1, not past it. D1a evidence/export has
+landed: the existing fused matmul scheduler reports B-window, A-micro, and
+accumulator promotion records without changing generated code. During that
+validation we found and fixed an unrelated DMA fence codegen regression: a
+generic inline-asm memory clobber had increased reload pressure and moved
+256x256x256 matmul from the archived ~1.729M-cycle baseline to ~1.987M cycles.
+Removing the clobber restored the baseline while keeping the real
+`fence iorw, iorw` instruction. D1b remains before later stages: finish the
+record schema, structural rejected-candidate records, sidecar/report tests, and
+matmul no-regression validation. Promotion records are still debug/evidence
+output, not yet a scheduler or profitability planner.
+
 ## Document Inventory
 
 | Status | File | What it is for |

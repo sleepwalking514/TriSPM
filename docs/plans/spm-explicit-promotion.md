@@ -47,6 +47,72 @@ validation gate passes should the next generalization happen.
 
 ### D1. Start With An Internal Promotion Record, Then Export Evidence
 
+D1 status (2026-05-02): **in progress**.
+
+D1a has landed and is validated as metadata-only.  D1b remains a blocker before
+D2 row-resident reductions, D3 profitability, or Gate B fusion work starts.
+Do not move D1 holes into later stages; only the actual cost model and automatic
+scheduling decisions belong to D3.
+
+Completed in D1a:
+
+- `ConvertMemoryToSPM` now emits pass-local promotion records for the existing
+  fused matmul schedule: B tile window, A micro tile, and accumulator tile.
+- `TRITON_SPM_PROMOTION_REPORT=1` / the pass `promotion-report` option writes a
+  `<kernel>_promotions.json` sidecar next to the tier sidecar.
+- The AOT build path now forces recompilation when sidecars are needed, so tier
+  and promotion reports are not silently lost on Triton cache hits.
+- Validation kept generated matmul behavior intact after fixing an unrelated
+  DMA fence codegen regression: `make verify-matmul` passes; a 64x64x64
+  SPM-only run passes result checking; 256x256x256 SPM-only cycles are
+  `1,729,063`, matching the archived `1,729,209` baseline within noise.
+
+Important finding:
+
+- The observed `~1,987,453` cycle matmul regression was not caused by promotion
+  reporting.  It was introduced earlier by adding a generic `"~{memory}"`
+  clobber to DMA fence inline assembly.  That clobber forced extra reloads
+  around every DMA fence and changed the 256x256x256 matmul assembly from the
+  fast 5913-line / 529-reload shape to a slower 6161-line / 608-reload shape.
+  Removing the clobber restored byte-identical fast assembly while keeping
+  `fence iorw, iorw` and volatile MMIO accesses.
+
+D1b blockers to finish before later stages:
+
+- Complete the promotion record schema for D1 fields: `source`, `scope`,
+  `shape`, `uses`, `bytes`, `copy_in`, `copy_out`, and rejection reason.  The
+  sidecar must make it obvious which fields are estimated, exact, accepted, or
+  rejected.
+- Add rejected-candidate records at the D1 level.  D1 rejection reasons should
+  be structural and conservative, such as unsupported pattern, no bounded
+  lifetime, insufficient static use count, SPM capacity overflow, or dynamic
+  shape/stride.  D3 can later attach measured costs and profitability scores.
+- Add lit/unit coverage for the promotion sidecar schema: accepted matmul
+  records, at least one rejected non-profitable/cache-path candidate, and
+  report-off behavior.
+- Keep the generated matmul IR/assembly unchanged while D1b lands.  Re-run the
+  64x64x64 correctness check and 256x256x256 no-regression check after any D1b
+  record/report change that touches the pass.
+- Clarify the JSON sidecar contract for D1: it is a debug/evidence schema with
+  stable field names for paper/artifact scripts, not a graph manifest and not a
+  durable IR contract.
+
+Not D1 work:
+
+- Promotion records do not need to drive `windowK`, `microM`, buffer layout, or
+  fused matmul lowering before D1 closes.  Those scheduling decisions are D3
+  and later.
+- Row-resident LayerNorm, softmax/block-resident paths, fused
+  producer-consumer promotion, and end-to-end experiments are later gates.  They
+  should not start until D1b evidence/reporting is complete.
+
+Open pitfall:
+
+- Do not reintroduce a generic DMA fence memory clobber as a quick correctness
+  fix without rerunning the 64x64x64 correctness check and 256x256x256
+  no-regression check.  If stronger compiler ordering is needed later, make it
+  a targeted lowering mode with its own performance gate.
+
 First step:
 
 - Add a pass-local C++ promotion record inside `ConvertMemoryToSPM`.
@@ -63,7 +129,7 @@ Validation:
 - Debug output or sidecar data must make promoted bytes, use count, and rejected
   candidates visible.
 
-Only after this validation:
+Only after all D1a/D1b validation:
 
 - Use the records to drive `windowK` selection.
 - Consider making promotion records a more durable IR attribute, JSON sidecar,
@@ -340,9 +406,15 @@ Steps:
 1. **Terminology/documentation**: update roadmap and placement docs so Tier
    placement and SPM promotion are no longer conflated.
 2. **Matmul promotion records**: refactor the existing fused scheduler without
-   changing generated behavior.
+   changing generated behavior.  D1a is done: the fused matmul scheduler reports
+   B-window, A-micro, and accumulator promotion records without changing the
+   generated schedule.  D1b is still open: finish the schema, structural
+   rejected-candidate records, and report tests before moving on.
 3. **Promotion evidence**: report promoted bytes, use counts, descriptor counts,
-   and rejected candidates.
+   and rejected candidates.  Partially done in D1a: existing promoted matmul
+   records are exported.  Still D1b blocker: structural rejected-candidate
+   records and stable evidence fields.  D3 may add measured profitability
+   scores later, but it must not absorb the basic D1 reporting work.
 4. **LayerNorm row-resident prototype**: add a separate opt-in path that copies
    one row of `x` once and reuses it across mean/variance/normalize.
 5. **Single-kernel profitability gate**: keep reduction SPM default-off unless

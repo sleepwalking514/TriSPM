@@ -583,14 +583,23 @@ The three-tier placement policy is the paper's most valuable insight. The Tier 2
 Tier 2 is a safe backing policy, not a replacement for explicit SPM reuse.
 `transformFusedMicroGemmLoop` already demonstrates the right direction by
 keeping a B window and accumulator tile resident in SPM, but that idea is not
-yet a first-class compiler abstraction. Add an `SPMPromotionPlanner` concept
-that records promoted tile shape, scope, use count, copy-in/copy-out, and SPM
-footprint. See `spm-explicit-promotion.md`.
+yet a planner-driven compiler abstraction. D1 is currently split into D1a and
+D1b: D1a has landed, so matmul now reports explicit B-window, A-micro, and
+accumulator promotion records without changing generated behavior.  A separate
+DMA fence regression was fixed at the same gate by removing the generic
+inline-asm memory clobber; the 256x256x256 SPM-only matmul check returned to
+the archived ~1.729M-cycle baseline.  D1b remains a blocker before row-resident
+or fusion work: finish the promotion sidecar schema, structural rejected
+candidates, and report tests.  After D1 closes, add an `SPMPromotionPlanner`
+concept that records promoted tile shape, scope, use count, copy-in/copy-out,
+SPM footprint, rejected candidates, and profitability. See
+`spm-explicit-promotion.md`.
 
 First targets:
 
 - Refactor the existing fused matmul scheduler into explicit promotion records
-  without changing behavior.
+  without changing behavior.  D1a evidence/export is done; D1b schema and
+  structural rejection reporting must close before moving to later stages.
 - Prototype a row-resident LayerNorm path that DMA-copies `x[row, :]` once and
   reuses it across mean, variance, and normalize, instead of streaming 8-float
   chunks three times.

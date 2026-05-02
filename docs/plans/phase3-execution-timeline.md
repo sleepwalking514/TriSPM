@@ -2,6 +2,11 @@
 name: TriSPM Phase 3 Execution Timeline
 overview: `../archive/matmul-spm-lowering-closure.md` 的 matmul P3 cold-start 主线已收敛并已看到 SPM crossover，但最终 headline 需要 SPM/cache blocking sweep 后再定；Tier sidecar、L2-warming、评测工具化、reduction 2-D 地址修复、single-load reduction 双缓冲、multi-load reduction matcher、bail-out cleanup/verification、Phase 4 前 transformer-facing workload smoke coverage 和 graph-level conservative placement build/verify MVP 均已完成。LayerNorm/reduction SPM 现在默认关闭，仅保留 opt-in correctness/coverage 路径。当前主线是 attention/fusion 可执行原型、fused DMA reuse tuning、promotion evidence 和 Phase 6 评测扩展。
 tasks:
+  - id: explicit-promotion-d1
+    priority: high
+    content: 为 explicit SPM promotion 建立第一版 evidence/export：在不改变 matmul 生成代码的前提下，记录现有 fused scheduler 的 B-window、A-micro、accumulator promotion records，并验证 matmul 不退化。
+    status: in_progress
+    note: 2026-05-02 D1a 完成。`TRITON_SPM_PROMOTION_REPORT=1` / pass option 可输出 `<kernel>_promotions.json`；AOT 已强制刷新 sidecar。验证时发现 256x256x256 matmul 从约 1.729M 退到约 1.987M cycles 的根因不是 promotion report，而是 DMA fence inline asm 的 `"~{memory}"` clobber。修复后 64x64x64 SPM-only result check PASS，256x256x256 SPM-only cycles 为 1,729,063，恢复到 archived baseline。D1b 仍是 blocker：补全 record schema、结构性 rejected-candidate records、sidecar/report 测试和 matmul no-regression 验证；这些坑不能挪到 D2/D3。promotion records 驱动调度/`windowK`/profitability 才是 D3 及之后的工作。
   - id: p3-profile-overlap
     content: 画清 matmul prefetch enqueue、current buffer 读取、下一轮 dma_wait 成功之间的时间线，确认是否存在真实 overlap。
     status: completed
