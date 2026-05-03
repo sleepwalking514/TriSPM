@@ -112,9 +112,11 @@ implementation artifact in the old row-resident path: every row paid a
 serialized DMA descriptor and wait before reduction work began. Removing that
 artifact with fill-on-first-pass SPM materialization collapses the old
 regression to near parity, so reduction promotion remains an active
-optimization line. The Phase 4/5/6 graph/attention/fusion,
-producer-consumer promotion, broader evaluation, and final blocking sweeps
-remain open on top of this corrected baseline.
+optimization line. The next compiler gate is
+`phase3.5-single-kernel-convergence.md`: close LayerNorm/Softmax
+row/block-resident SPM before Phase 4 graph/attention/fusion becomes the main
+line. Phase 4/5/6 producer-consumer promotion, broader evaluation, and final
+blocking sweeps remain open on top of this corrected baseline.
 
 `matmul` is functionally correct, has the right compute shape, and has crossed
 over under the cold-start P3 headline metric. SPM beats the cache baseline on

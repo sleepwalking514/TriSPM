@@ -112,6 +112,18 @@
 - Kernel-local `_tiers.json` 继续用于单 kernel smoke / Phase 3 验证；graph mode 应由上层 placement manifest 覆盖或修正 per-kernel tier 决策。
 - 第一版 graph placement 不依赖 fusion。Fusion 只作为局部优化（如 matmul+bias、residual+layer_norm、softmax 内部），不能作为跨算子正确性的基础。
 
+与 Phase 3.5 的边界：
+
+- `three-tier-placement.md` 负责跨 kernel backing allocation：默认
+  cacheable Tier 2 backbone、选择性 Tier 3 streaming input、未来 Tier 1 hot
+  state。
+- `phase3.5-single-kernel-convergence.md` 负责单 kernel / fused-region 内的
+  SPM residency：admission、lifetime、显式 buffer rotation / replacement、和
+  reduction profitability。
+- 因此，cross-kernel 先走 cacheable + optional fusion；不要依赖普通 Triton
+  GPU 风格 shared memory 跨 kernel 保留，也不要把 Tier 3 当成长期 tensor
+  属性。
+
 ---
 
 ## 3. 实现计划（MVP — Tier 2/3）

@@ -56,14 +56,17 @@ the mature SPM performance path and low-reuse elementwise kernels stay cache
 path. Reduction SPM needs another measured optimization pass: the latest
 LayerNorm data shows the old cache-favorable conclusion was partly caused by a
 serialized DMA implementation artifact, not by an inherent SPM limitation.
-Phase 4/5/6 graph, attention/fusion, producer-consumer promotion, and broader
-evaluation remain open on top of that corrected single-kernel baseline.
+The next compiler gate is Phase 3.5 single-kernel convergence: finish the
+reduction row/block-resident policy before treating Phase 4 graph/fusion as the
+main line. Phase 4/5/6 graph, attention/fusion, producer-consumer promotion, and
+broader evaluation remain open on top of that corrected single-kernel baseline.
 
 ## Document Inventory
 
 | Status | File | What it is for |
 | --- | --- | --- |
 | Current | [`plans/phase3.md`](plans/phase3.md) | Phase 3 status page: what is done, what is current, what still blocks Phase 4, and what is explicitly out of scope. Start here for the live compiler state. |
+| Current | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | Active Phase 3.5 plan: close single-kernel reduction SPM using admission, lifetime, explicit buffer rotation, and measured row/block-resident profitability before Phase 4. |
 | Current | [`plans/phase3-execution-timeline.md`](plans/phase3-execution-timeline.md) | Ordered execution timeline for Phase 3. Shows completed stages, current stage, and next stages. |
 | Current | [`plans/phase3-compiler-backlog.md`](plans/phase3-compiler-backlog.md) | Phase 3 compiler audit/closure record: GEMM/reduction robustness is done for the current coverage; output-tile SPM writeback is deferred to Phase 4b. |
 | Current | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) | Three-tier placement design and MVP state: Tier 2/3 plumbing landed; graph-level conservative placement build/verify MVP landed; executable graph harness remains P0. |
@@ -91,7 +94,8 @@ evaluation remain open on top of that corrected single-kernel baseline.
 | Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
 | Current | Active prototype | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
 | Current | Active gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3 | Conservative profitability evidence landed: accepts existing fused matmul evidence, rejects streaming reductions and small row-resident reductions, and can accept large fill-on-first-pass row-resident evidence while default LayerNorm remains cache path. |
-| Current | Next compiler gate | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Move to executable attention/fusion and producer-consumer promotion; single-kernel D1-D3 promotion/rejection groundwork is closed for current coverage. |
+| Current | Next compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | Close reduction single-kernel SPM first: LayerNorm break-even/win, Softmax row/block-resident evidence, and refit D3 profitability. |
+| Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Move to executable attention/fusion and producer-consumer promotion after Phase 3.5 reduction closure. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |

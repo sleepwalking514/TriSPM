@@ -592,34 +592,34 @@ memory clobber; D1b validation kept 64x64x64 SPM-only correctness passing and
 256x256x256 SPM-only at 1,729,209 cycles / 5913 assembly lines.
 
 D2 has landed as a separate opt-in row-resident reduction prototype, not as a
-default policy. `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` copies one
-LayerNorm `x[row, :]` into SPM, reuses it across mean, variance, and normalize,
-and keeps `gamma` / `beta` on cache. Default `make verify-layer_norm` still
-proves the cache path; `TRITON_ENABLE_SPM_REDUCTIONS=1` remains the old
-streaming reduction coverage path; the D1 sidecar remains debug/evidence only.
-D2 measurements are still slower than cache (32x64: 10,279 vs 6,138 cycles;
-512x1024: 1,245,422 vs 1,012,922 cycles). D3 has now landed the conservative
-static promotion/rejection gate for current single-kernel coverage:
-`TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records descriptor/MMIO/wait/fence
-and byte/use evidence in the D1 debug sidecar, accepts the existing fused matmul
-B-window / accumulator evidence, and rejects current streaming or row-resident
-LayerNorm reduction promotion while keeping tier placement clean. This is still
-evidence and policy plumbing, not a default row/block-resident enablement. See
-`spm-explicit-promotion.md`.
+default policy. `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` now uses
+fill-on-first-pass materialization: the mean pass reads LayerNorm `x[row, :]`
+from the original path while writing loaded chunks into SPM, then variance and
+normalize reuse the SPM row while `gamma` / `beta` stay on cache. Default
+`make verify-layer_norm` still proves the cache path;
+`TRITON_ENABLE_SPM_REDUCTIONS=1` remains the old streaming reduction coverage
+path; the D1 sidecar remains debug/evidence only. The re-audit showed the old
+row-DMA result was dominated by serialized DMA wait, and fill-on-first-pass
+improved LayerNorm to near parity (32x64 +4.4%, 512x1024 +0.5%). D3 therefore
+remains a conservative evidence gate, not a final reduction-performance closure:
+it accepts fused matmul evidence, rejects streaming reductions and small
+row-resident reductions, and can accept large fill-on-first-pass row residency
+as opt-in evidence while default LayerNorm stays cache path. See
+`spm-explicit-promotion.md` and `phase3.5-single-kernel-convergence.md`.
 
 First targets:
 
 - Refactor the existing fused matmul scheduler into explicit promotion records
   without changing behavior.  Done in D1; the records remain debug/evidence
   output and do not yet drive scheduling.
-- Prototype a row-resident LayerNorm path that DMA-copies `x[row, :]` once and
-  reuses it across mean, variance, and normalize, instead of streaming 8-float
-  chunks three times.  Done in D2 as opt-in evidence only.
+- Prototype a row-resident LayerNorm path that materializes `x[row, :]` during
+  the first pass and reuses it across variance and normalize, instead of
+  streaming 8-float chunks three times.  Done in D2 as opt-in evidence only;
+  Phase 3.5 owns the measured overhead reduction and generalization.
 - Keep reduction SPM default-off unless the promotion path beats cache on the
-  existing 32x64 and 512x1024 comparisons.  D2 did not meet this bar, so D3
-  must reject it by default until a stronger cost model or schedule changes the
-  measurements.  Done in D3 for current LayerNorm streaming and row-resident
-  candidates.
+  existing 32x64 and 512x1024 comparisons.  Fill-on-first-pass is near parity
+  but not yet a clear default.  Phase 3.5 refits D3 around measured SPM
+  store/read overhead and extends the row/block-resident plan to Softmax.
 
 ### 6c. Expand Workload Coverage [P1]
 
@@ -672,19 +672,20 @@ SPM vs cache cost-effectiveness at equal silicon area:
 ```
 Phase 1 (AOT cross-compile) ✅ COMPLETE
   └─> Phase 2 (DMA dialect ops + address spaces + lowering) ✅ COMPLETE
-        └─> Phase 3 (SPM pass: GEMM → reduction → data placement) ✅ current single-kernel coverage closed
-              ├─> Phase 4 (Attention + multi-kernel SPM + optimizations) ← CURRENT NEXT
-              │     └─> Phase 5 (End-to-end transformer inference pipeline)
+        └─> Phase 3 (SPM pass: GEMM → reduction → data placement) ✅ matmul/compiler robustness closed
+              ├─> Phase 3.5 (single-kernel reduction SPM convergence) ← CURRENT NEXT
+              │     └─> Phase 4 (Attention + multi-kernel SPM + optimizations)
+              │           └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
                     ├─ 6a Cache baseline [Phase 3 matmul/layer_norm baseline ready]
                     ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + graph build/verify done; executable graph pending]
-                    ├─ 6c Additional workloads [after Phase 3/4 pattern support]
+                    ├─ 6c Additional workloads [after Phase 3.5/4 pattern support]
                     ├─ 6d Breakdown analysis [built on 6a data]
                     ├─ 6e Area comparison [independent, can start anytime]
                     └─ 6f Sensitivity analysis [built on 6a framework]
 ```
 
-**Minimum viable paper:** Phase 1 + 2 + 3 + 6a + 6b (GEMM + LayerNorm, SPM vs Cache comparison, Tier 2 verification)
+**Minimum viable paper:** Phase 1 + 2 + 3 + 3.5 + 6a + 6b (GEMM + reduction, SPM vs Cache comparison, Tier 2 verification)
 **Solid paper (CGO/PACT level):** + 6c + 6d (5 workloads, breakdown analysis)
 **Strong paper (ASPLOS/MICRO attempt):** + Phase 5 + 6e + 6f (end-to-end pipeline, area comparison, sensitivity analysis)
 

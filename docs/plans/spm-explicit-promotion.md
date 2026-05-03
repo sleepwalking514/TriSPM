@@ -594,6 +594,12 @@ closed as a reduction-performance claim: reductions remain cache path by
 default, and the next task is to turn near-parity row residency into a measured
 win before broadening to softmax.
 
+Phase 3.5 owns that next task.  See
+`phase3.5-single-kernel-convergence.md` for the concrete pass/code plan:
+generic reduction admission/lifetime/evidence, explicit buffer role and
+rotation modeling, LayerNorm overhead reduction, Softmax row/block-resident
+coverage, and D3 profitability refit.
+
 ### Gate B: Multi-Kernel / Fusion Promotion
 
 Goal: show that SPM residency is useful across producer-consumer boundaries, not
