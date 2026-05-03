@@ -43,13 +43,22 @@ Phase 3.5 P1a is now landed.  The reduction pass has an internal
 `ReductionResidencyPlan` shape, LayerNorm still lowers through the same
 CPU-direct row-resident schedule, and promotion sidecars report producer pass,
 consumer passes, buffer role, rotation policy, copy-in mode, SPM slots, and
-expected markers.  Softmax large-row detection now emits a rejected
-`Softmax x row` plan with `unsupported_reduction_residency_plan`; Softmax IR
-stays cache path until a measured lowering is added.  Next work is P2:
-reduce fill-on-first-pass overhead, and probe row-block DMA double buffering as
-a coarse-grained alternative to the old tiny-chunk streaming DMA path.  That
-DMA variant would stage multiple rows per buffer, compute those rows multiple
-times, and prefetch the next row block in the alternate buffer.
+expected markers.
+
+Phase 3.5 P2a is now landed as an opt-in SPM-path expansion, not a default
+policy change.  Softmax large-row now has a CPU-direct row-resident lowering:
+the max pass can fill SPM and the exp/sum plus normalize/store passes can reuse
+that resident row.  On `phase35-row-resident-large-row` (128x1024, BLOCK_N=64,
+flushed ROI) it measured 7,174,501 SPM cycles vs 7,709,817 cache cycles
+(`-6.9%`) with zero DMA/fence markers.  A second `producer_store` variant was
+also measured; it reduces SPM reads but is slower for Softmax (`-0.6%`) and
+bad for large LayerNorm (`+17.6%`), so first-pass fill remains the better
+row-resident schedule.  LayerNorm still does not clear the default bar:
+first-pass large is near parity (`+0.5%`), producer-store small is near parity
+(`+0.3%`), but the large producer-store case regresses.  Next work is P3:
+refit the profitability gate so Softmax large-row can be accepted with measured
+evidence while LayerNorm stays conservative, and keep the row-block DMA
+double-buffer probe as a later coarse-grained alternative to tiny streaming DMA.
 
 ## Document Inventory
 
@@ -84,7 +93,7 @@ times, and prefetch the next row block in the alternate buffer.
 | Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
 | Current | Active prototype | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
 | Current | Active gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3 | Conservative profitability evidence landed: accepts existing fused matmul evidence, rejects streaming reductions and small row-resident reductions, and can accept large fill-on-first-pass row-resident evidence while default LayerNorm remains cache path. |
-| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P1a plan extraction is landed; next is P2 overhead reduction plus a row-block DMA double-buffer probe before default promotion. |
+| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P2a row-resident SPM expansion is landed: Softmax large-row has a measured CPU-direct SPM win, while LayerNorm remains opt-in/conservative; next is D3/P3 profitability refit before any default promotion. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Move to executable attention/fusion and producer-consumer promotion after Phase 3.5 reduction closure. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |

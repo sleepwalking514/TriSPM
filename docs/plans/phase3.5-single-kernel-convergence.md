@@ -149,11 +149,11 @@ Landed:
 - Promotion sidecars now include `residency_plan` evidence for row-resident
   reductions: producer pass, consumer passes, buffer role, rotation policy,
   copy-in mode, required SPM slots, and expected SPM/stat markers.
-- Softmax row-resident detection now recognizes the Phase 3.5 large-row
+- At P1a time, Softmax row-resident detection learned to recognize the Phase 3.5 large-row
   three-pass pattern (`max`, `exp_sum`, `normalize_store`) and emits a clean
   rejected `Softmax x row` plan with
-  `unsupported_reduction_residency_plan`.  Because no Softmax lowering exists
-  yet, its IR remains cache path with no `addrspace(3)`.
+  `unsupported_reduction_residency_plan`.  Its IR remained cache path with no
+  `addrspace(3)` until the P2a lowering below.
 - `run_experiment.py`, the workload Makefile, and
   `phase35_baseline.sh verify` can now check rejection source and
   `residency_plan` evidence directly.
@@ -170,6 +170,70 @@ Validation run:
 Next: P2 fill-on-first-pass overhead reduction, plus a row-block DMA
 double-buffer design probe.  The scheduler still needs a measured performance
 win before reduction promotion can become the default.
+
+### 2026-05-03 P2a Softmax Row-Resident Lowering And Producer-Store Probe
+
+Landed:
+
+- Softmax row-resident plans now have a concrete CPU-direct lowering instead
+  of stopping at `unsupported_reduction_residency_plan`.  For the large-row
+  pattern, the first pass (`max`) can fill the resident SPM row, and the
+  `exp_sum` plus `normalize_store` consumers read `x` from SPM.
+- A schedule variant is selectable with
+  `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=producer_store`.  This leaves the
+  first reduction pass on the original cache path, writes `x` into SPM during
+  the next consumer pass, and uses SPM for the final consumer.  It was added to
+  test whether avoiding one SPM read beats fill-on-first-pass.
+- Phase 3.5 manifests now include producer-store presets for LayerNorm and
+  Softmax.  The build script includes the producer-pass mode in the Triton
+  compile-cache key so the two schedules cannot accidentally reuse stale IR.
+- `phase35_baseline.sh verify` now checks both Softmax SPM schedules as
+  accepted row-resident plans, with empty tier sidecars, no fences, and
+  promotion sidecars that expose the selected producer pass.
+
+Validation run:
+
+- `ninja -C compiler/build/cmake.linux-x86_64-cpython-3.12 triton-opt`
+- `ninja -C compiler/build/cmake.linux-x86_64-cpython-3.12 /home/feige/TriSPM/compiler/python/triton/_C/libtriton.so`
+- Manual `triton-opt | FileCheck` checks for Softmax row-resident IR,
+  producer-store IR, and Softmax promotion sidecar.  Direct `llvm-lit` from
+  this checkout still needs the generated site config wiring, so the manual
+  FileCheck commands were used for the changed prefixes.
+- `workloads/scripts/phase35_baseline.sh verify`
+- `make -C workloads verify-matmul`
+- Gem5 flushed ROI compares for:
+  - `layer_norm phase35-row-resident-producer-large`
+  - `layer_norm phase35-row-resident-producer-small`
+  - `softmax phase35-row-resident-large-row`
+  - `softmax phase35-row-resident-producer-large-row`
+
+Measured findings:
+
+| Kernel preset | Schedule | Result |
+|---|---|---|
+| `layer_norm phase35-row-resident-large` | fill-on-first-pass | 1,015,329 SPM vs 1,010,763 cache cycles (`+0.5%`); zero DMA/fence; SPM reads 4,227,072 B and writes 2,097,152 B |
+| `layer_norm phase35-row-resident-producer-large` | producer-store | 1,191,772 SPM vs 1,013,124 cache cycles (`+17.6%`); fewer SPM reads, but the extra cache-path pass is worse |
+| `layer_norm phase35-row-resident-producer-small` | producer-store | 5,635 SPM vs 5,618 cache cycles (`+0.3%`); near parity, but small rows still do not justify default promotion |
+| `softmax phase35-row-resident-large-row` | fill-on-first-pass | 7,174,501 SPM vs 7,709,817 cache cycles (`-6.9%`); zero DMA/fence; SPM reads 1,023,392 B and writes 524,288 B |
+| `softmax phase35-row-resident-producer-large-row` | producer-store | 7,658,442 SPM vs 7,706,343 cache cycles (`-0.6%`); fewer SPM reads, but slower than fill-on-first-pass |
+
+Conclusion:
+
+- Softmax is now the strongest reduction SPM candidate.  The large-row
+  fill-on-first-pass schedule has a measured SPM win and should feed the P3
+  profitability refit.
+- Producer-store is useful as evidence, but not as the preferred schedule.
+  It reduces SPM read bytes, yet for large LayerNorm the saved SPM read loses
+  badly to the extra cache-path read.  For Softmax it remains positive but
+  much weaker than first-pass fill.
+- LayerNorm remains opt-in/conservative.  Small producer-store is near parity
+  and large fill-on-first-pass is near parity, but there is no stable win on
+  both required shapes.
+
+Next: P3 profitability refit.  Accept measured Softmax large-row SPM evidence
+behind a deterministic gate, keep LayerNorm thresholds conservative, and leave
+row-block DMA double buffering as the next coarse-grained alternative if more
+LayerNorm/Softmax shapes need overlap or descriptor amortization.
 
 ## Work Items
 
@@ -235,17 +299,18 @@ Tasks:
 - Keep LayerNorm as the first concrete lowering.
 - Add Softmax matching after LayerNorm only for a schedule with real memory
   reuse: max pass, exp/sum pass, normalize/store over a multi-block row, or a
-  clearly rejected single-block record.  P1a detects the large-row reuse shape
-  and leaves a rejected unsupported plan record; Softmax lowering remains P2+
-  work.
+  clearly rejected single-block record.  P1a detected the large-row reuse shape
+  and left a rejected unsupported plan record; P2a adds the measured
+  CPU-direct row-resident lowering.
 
 Exit criteria:
 
 - P1a complete: LayerNorm still emits fill-on-first-pass SPM with no DMA
   fences, and unsupported Softmax row residency leaves clean rejection records
   plus cache-path IR.
-- Remaining P1/P2 work: add a measured Softmax row/block-resident lowering
-  before treating Softmax as an accepted SPM promotion path.
+- P2a complete: Softmax large-row emits accepted row-resident SPM IR and
+  promotion evidence.  Default enablement still waits for P3 profitability
+  refit.
 
 ### P2. Reduce Fill-On-First-Pass Overhead
 
@@ -264,6 +329,8 @@ Tasks:
   - avoid redundant SPM read when a consumer can be fused into the fill pass;
   - use larger row chunks where RVV/gem5 constraints allow;
   - specialize gamma/beta policy separately from `x` residency.
+- Try producer-store as a concrete SPM-path alternative.  Done in P2a:
+  it reduces SPM reads but is not the preferred schedule after measurement.
 - Do not make streaming DMA reduction default unless it beats the resident
   plan; it is now a fallback/debug path.
 
@@ -305,10 +372,18 @@ Admission requirements before implementation:
 
 Exit criteria:
 
-- LayerNorm 512x1024 is at least break-even under flushed ROI.
+- LayerNorm 512x1024 is at least break-even under flushed ROI.  P2a result:
+  fill-on-first-pass remains near parity (`+0.5%`); producer-store is rejected
+  for large LayerNorm (`+17.6%`).
 - 32x64 either breaks even or has an explained small-row rejection threshold.
+  P2a result: producer-store reaches near parity (`+0.3%`) but does not
+  justify default promotion by itself.
+- Softmax large-row gets a measured row-resident result.  P2a result:
+  fill-on-first-pass wins (`-6.9%`), producer-store is weaker (`-0.6%`).
 - Row-block DMA double buffering has a buildable prototype or a documented
   rejection with measured descriptor/wait overhead and SPM-capacity math.
+  Still open after P2a; keep it as the next coarse-grained DMA probe, not a
+  blocker for Softmax CPU-direct evidence.
 
 ### P3. Profitability Gate Refit
 

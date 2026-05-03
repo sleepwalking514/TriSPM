@@ -600,11 +600,15 @@ normalize reuse the SPM row while `gamma` / `beta` stay on cache. Default
 `TRITON_ENABLE_SPM_REDUCTIONS=1` remains the old streaming reduction coverage
 path; the D1 sidecar remains debug/evidence only. The re-audit showed the old
 row-DMA result was dominated by serialized DMA wait, and fill-on-first-pass
-improved LayerNorm to near parity (32x64 +4.4%, 512x1024 +0.5%). D3 therefore
+improved LayerNorm to near parity (current large-row evidence remains about
+`+0.5%`).  Phase 3.5 P2a then extended the same CPU-direct row-resident
+lowering to Softmax: 128x1024 / BLOCK_N=64 measured 7,174,501 SPM cycles vs
+7,709,817 cache cycles (`-6.9%`) with zero DMA/fence markers.  D3 therefore
 remains a conservative evidence gate, not a final reduction-performance closure:
 it accepts fused matmul evidence, rejects streaming reductions and small
-row-resident reductions, and can accept large fill-on-first-pass row residency
-as opt-in evidence while default LayerNorm stays cache path. See
+row-resident reductions, can accept large fill-on-first-pass LayerNorm as
+opt-in evidence, and now needs a profitability refit for measured Softmax
+row-resident wins while default LayerNorm stays cache path. See
 `spm-explicit-promotion.md` and `phase3.5-single-kernel-convergence.md`.
 
 First targets:
@@ -612,14 +616,14 @@ First targets:
 - Refactor the existing fused matmul scheduler into explicit promotion records
   without changing behavior.  Done in D1; the records remain debug/evidence
   output and do not yet drive scheduling.
-- Prototype a row-resident LayerNorm path that materializes `x[row, :]` during
-  the first pass and reuses it across variance and normalize, instead of
-  streaming 8-float chunks three times.  Done in D2 as opt-in evidence only;
-  Phase 3.5 owns the measured overhead reduction and generalization.
+- Prototype row-resident reduction paths that materialize `x[row, :]` and
+  reuse it across later passes, instead of streaming small chunks repeatedly.
+  LayerNorm is done as opt-in evidence only; Softmax large-row now has a
+  measured CPU-direct SPM win.  Phase 3.5 owns the D3 profitability refit.
 - Keep reduction SPM default-off unless the promotion path beats cache on the
-  existing 32x64 and 512x1024 comparisons.  Fill-on-first-pass is near parity
-  but not yet a clear default.  Phase 3.5 refits D3 around measured SPM
-  store/read overhead and extends the row/block-resident plan to Softmax.
+  existing 32x64 and 512x1024 comparisons.  LayerNorm fill-on-first-pass is
+  near parity but not yet a clear default; Softmax large-row is promising.
+  Phase 3.5 refits D3 around measured SPM store/read overhead.
 
 ### 6c. Expand Workload Coverage [P1]
 

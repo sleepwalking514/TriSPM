@@ -86,6 +86,12 @@ automatically:
   and improved LayerNorm from clear regressions to near parity (32x64 +4.4%,
   512x1024 +0.5%), so reduction SPM remains active optimization work rather
   than a closed negative result.
+- Phase 3.5 P2a extends the row-resident lowering to Softmax large-row.  The
+  128x1024 / BLOCK_N=64 flushed ROI compare measured 7,174,501 SPM cycles vs
+  7,709,817 cache cycles (`-6.9%`) with zero DMA/fence markers.  A
+  `producer_store` probe reduced SPM reads but was weaker for Softmax and bad
+  for large LayerNorm, so first-pass fill remains the preferred row-resident
+  schedule.
 - Explicit promotion D3 has landed as a conservative opt-in profitability gate.
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the
@@ -115,7 +121,9 @@ regression to near parity, so reduction promotion remains an active
 optimization line. The next compiler gate is
 `phase3.5-single-kernel-convergence.md`: close LayerNorm/Softmax
 row/block-resident SPM before Phase 4 graph/attention/fusion becomes the main
-line. Phase 4/5/6 producer-consumer promotion, broader evaluation, and final
+line. Softmax now has a measured large-row SPM win, but LayerNorm remains
+default-off and the profitability gate still needs a measured refit. Phase
+4/5/6 producer-consumer promotion, broader evaluation, and final
 blocking sweeps remain open on top of this corrected baseline.
 
 `matmul` is functionally correct, has the right compute shape, and has crossed
@@ -201,6 +209,12 @@ The MVP framework is landed. Current workload verification confirms:
   implementation removes DMA fences from this path; with
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1`, D3 still rejects small rows as
   `insufficient_row_work` but accepts large rows as opt-in evidence.
+  A producer-store P2a probe reaches near parity for 32x64 but regresses
+  512x1024, so it is not the preferred LayerNorm schedule.
+- `softmax` row-resident promotion is now opt-in evidence instead of only a
+  rejected plan. `phase35-row-resident-large-row` emits accepted `Softmax x
+  row` promotion evidence and measured a 6.9% cycle win under flushed ROI.
+  Default Softmax still stays cache path until D3 admission is refit.
   Forcing the old streaming reduction inputs to Tier 2 cacheable still leaves
   that path far slower than cache, so the default-off decision for streaming
   SPM is not just a Tier 3 uncacheable-buffer workaround.

@@ -33,10 +33,15 @@ run_verify() {
     run_cmd python3 "$DRIVER" softmax --mode verify --preset phase35-large-row
     run_cmd python3 "$DRIVER" softmax --mode verify \
         --preset phase35-row-resident-large-row \
-        --expect-spm false \
+        --expect-spm true \
         --expect-tier-json empty \
-        --expect-rejection-source "Softmax x row" \
-        --expect-rejection-reason unsupported_reduction_residency_plan \
+        --expect-promotion-source "Softmax x row" \
+        --expect-residency-plan "Softmax x row"
+    run_cmd python3 "$DRIVER" softmax --mode verify \
+        --preset phase35-row-resident-producer-large-row \
+        --expect-spm true \
+        --expect-tier-json empty \
+        --expect-promotion-source "Softmax x row" \
         --expect-residency-plan "Softmax x row"
     run_cmd python3 "$DRIVER" layer_norm --mode verify \
         --preset phase35-row-resident-small \
@@ -46,6 +51,12 @@ run_verify() {
         --expect-residency-plan "LayerNorm x row"
     run_cmd python3 "$DRIVER" layer_norm --mode verify \
         --preset phase35-row-resident-large \
+        --expect-spm true \
+        --expect-tier-json empty \
+        --expect-promotion-source "LayerNorm x row" \
+        --expect-residency-plan "LayerNorm x row"
+    run_cmd python3 "$DRIVER" layer_norm --mode verify \
+        --preset phase35-row-resident-producer-large \
         --expect-spm true \
         --expect-tier-json empty \
         --expect-promotion-source "LayerNorm x row" \
@@ -81,11 +92,17 @@ run_full() {
     run_cmd python3 "$DRIVER" layer_norm --mode compare \
         --preset phase35-row-resident-large
     run_cmd python3 "$DRIVER" layer_norm --mode compare \
+        --preset phase35-row-resident-producer-large
+    run_cmd python3 "$DRIVER" layer_norm --mode compare \
         --preset phase35-d3-small
     run_cmd python3 "$DRIVER" layer_norm --mode compare \
         --preset phase35-d3-large
     run_cmd python3 "$DRIVER" softmax --mode compare \
         --preset phase35-large-row
+    run_cmd python3 "$DRIVER" softmax --mode compare \
+        --preset phase35-row-resident-large-row
+    run_cmd python3 "$DRIVER" softmax --mode compare \
+        --preset phase35-row-resident-producer-large-row
 }
 
 case "$suite" in
