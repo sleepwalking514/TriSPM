@@ -215,7 +215,8 @@ produces `{"0":3,"1":3,"2":3}`, 22 `addrspace(3)` matches, and 78
   `ConvertMemoryToSPM` 的静态 loop guard 可以证明边界。该路径在
   `TRITON_ENABLE_SPM_REDUCTIONS=1` 时仍命中 SPM，最终 normalize pass 的
   3 个 load（x, gamma, beta）由 multi-load reduction/streaming matcher
-  覆盖。默认策略关闭 reduction SPM，因为该路径性能远差于 cache。
+  覆盖。默认策略关闭旧 streaming reduction SPM，因为该路径性能远差于
+  cache；row-resident reduction 现在是独立 opt-in promotion 实验。
 
 **结论**：
 
@@ -235,13 +236,17 @@ produces `{"0":3,"1":3,"2":3}`, 22 `addrspace(3)` matches, and 78
   placement path：`TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` 只在
   `ConvertMemoryToSPM` 内提升 `x[row, :]`，写 D1-schema promotion evidence，
   并保持 `_tiers.json` 为 `{}`。它证明 tier sidecar 仍只是 backing-placement
-  evidence，不是 promotion scheduler 输入。当前性能仍慢于 cache（32x64
-  +67.5%，512x1024 +23.0%），所以默认策略继续保持 cache path。
+  evidence，不是 promotion scheduler 输入。旧 row-DMA 版本慢于 cache
+  （32x64 +67.5%，512x1024 +23.0%），但 2026-05-03 的
+  fill-on-first-pass 版本去掉每行 DMA/wait 后已接近持平（32x64 +4.4%，
+  512x1024 +0.5%）。所以默认策略继续保持 cache path，但 reduction SPM
+  不能再视为已关闭的失败路径。
 - D3 profitability gate 继续守住这个边界：
-  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` 拒绝当前 streaming 和
-  row-resident LayerNorm reduction 时，LLIR 保持无 SPM marker，`_tiers.json`
-  也保持 `{}`。Promotion profitability evidence 仍写在 promotion sidecar，
-  不进入 tier/backing placement 接口。
+  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` 拒绝 streaming reduction
+  和小行 row-resident reduction 时，LLIR 保持无 SPM marker，`_tiers.json`
+  也保持 `{}`；大行 fill-on-first-pass row-resident 可以作为 opt-in
+  evidence 接受，但 tier sidecar 仍为空。Promotion profitability evidence
+  仍写在 promotion sidecar，不进入 tier/backing placement 接口。
 - `vector_add` 不需要 SPM（无 tile reuse），空 JSON 是正确行为。文档中"三个 workload 全部命中 Tier 3"的说法不准确，已修正。
 
 2026-05-02 also added the first transformer-facing smoke workloads.  These are

@@ -76,20 +76,23 @@ automatically:
   scheduling or profitability.
 - Explicit promotion D2 has landed as an opt-in row-resident LayerNorm
   prototype. `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` enables a separate
-  lowering that copies `x[row, :]` once into SPM, reuses it across mean,
-  variance, and normalize, and leaves `gamma` / `beta` on cache. Default
-  `layer_norm` still verifies as cache path, and the old
+  lowering that materializes `x[row, :]` into SPM on the first reduction pass,
+  reuses it across variance and normalize, and leaves `gamma` / `beta` on
+  cache. Default `layer_norm` still verifies as cache path, and the old
   `TRITON_ENABLE_SPM_REDUCTIONS=1` streaming reduction coverage remains
   separate. D2 uses the D1 sidecar only as debug/evidence; it does not drive
-  planner, scheduling, buffer layout, `windowK`, or profitability. The measured
-  D2 path is still slower than cache (32x64 +67.5%, 512x1024 +23.0%), so it
-  cannot become a default policy.
+  planner, scheduling, buffer layout, `windowK`, or profitability. The
+  2026-05-03 fill-on-first-pass rework removed serialized row DMA/wait overhead
+  and improved LayerNorm from clear regressions to near parity (32x64 +4.4%,
+  512x1024 +0.5%), so reduction SPM remains active optimization work rather
+  than a closed negative result.
 - Explicit promotion D3 has landed as a conservative opt-in profitability gate.
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the
-  existing fused matmul B-window / accumulator evidence, and rejects current
-  streaming or row-resident LayerNorm reductions.  Rejected reductions stay on
-  the cache path and keep the tier sidecar empty.  The sidecar remains
+  existing fused matmul B-window / accumulator evidence, rejects streaming
+  reductions and small row-resident LayerNorm reductions, and can accept large
+  fill-on-first-pass row-resident evidence for opt-in experiments. Default
+  LayerNorm stays cache path until measured wins are clear. The sidecar remains
   debug/evidence only; it is not read back by planning, placement, scheduling,
   `windowK`, or buffer-layout code.
 - A no-regression issue found during D1 validation is fixed: DMA fences still
@@ -102,9 +105,16 @@ automatically:
 
 ### Current State of P3
 
-Phase 3 is converged for the current single-kernel compiler scope.  The
-remaining items belong to Phase 4/5/6: executable graph/attention/fusion,
-producer-consumer promotion, broader evaluation, and final blocking sweeps.
+Phase 3 matmul and compiler robustness are converged for the current
+single-kernel scope, but the broader single-kernel SPM policy is not fully
+converged for reductions. The 2026-05-03 LayerNorm re-audit found a concrete
+implementation artifact in the old row-resident path: every row paid a
+serialized DMA descriptor and wait before reduction work began. Removing that
+artifact with fill-on-first-pass SPM materialization collapses the old
+regression to near parity, so reduction promotion remains an active
+optimization line. The Phase 4/5/6 graph/attention/fusion,
+producer-consumer promotion, broader evaluation, and final blocking sweeps
+remain open on top of this corrected baseline.
 
 `matmul` is functionally correct, has the right compute shape, and has crossed
 over under the cold-start P3 headline metric. SPM beats the cache baseline on
@@ -172,8 +182,9 @@ The MVP framework is landed. Current workload verification confirms:
   residual elementwise workload.
 - `softmax`: empty tier JSON and no SPM markers by default. Expected for the
   first row-wise smoke workload; future row/block-resident promotion experiments
-  should stay opt-in and measured before changing the default. D2 proved this
-  boundary for LayerNorm but did not produce a cache-beating default policy.
+  should stay opt-in and measured before changing the default. The latest
+  LayerNorm result shows this boundary should be revisited with a reuse-aware
+  reduction schedule rather than closed based on the old DMA-row experiment.
 - `layer_norm`: default `expect_spm = false`, empty tier JSON, and no SPM
   markers. New flushed compares show the SPM-enabled runtime with cache-path
   LayerNorm is effectively equal to cache baseline: 32x64 is -3.6% cycles in
@@ -184,13 +195,13 @@ The MVP framework is landed. Current workload verification confirms:
 - `layer_norm` row-resident promotion is also opt-in:
   `TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1` generates SPM markers and a
   `LayerNorm x row` promotion sidecar while keeping the tier JSON empty. It is
-  experiment evidence, not a default policy. With
-  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1`, D3 rejects the current
-  row-resident LayerNorm candidate before lowering and keeps LLIR/tier sidecars
-  clean.
-  Forcing those inputs to Tier 2 cacheable still leaves reduction SPM far
-  slower than cache, so the default-off decision is not just a Tier 3
-  uncacheable-buffer workaround.
+  experiment evidence, not a default policy. The current fill-on-first-pass
+  implementation removes DMA fences from this path; with
+  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1`, D3 still rejects small rows as
+  `insufficient_row_work` but accepts large rows as opt-in evidence.
+  Forcing the old streaming reduction inputs to Tier 2 cacheable still leaves
+  that path far slower than cache, so the default-off decision for streaming
+  SPM is not just a Tier 3 uncacheable-buffer workaround.
 
 See `three-tier-placement.md` §4.1 for full analysis.
 

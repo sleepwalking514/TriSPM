@@ -145,15 +145,16 @@ Only after D1 validation:
 
 ### D2. Keep Row-Resident Reduction Separate From Streaming Reduction
 
-D2 status (2026-05-03): **completed as opt-in prototype; not default-worthy**.
+D2 status (2026-05-03): **active opt-in prototype; fill-on-first-pass variant
+validated to near parity, not default-enabled yet**.
 
 First step:
 
 - Add a new opt-in row-resident lowering before `transformReductionLoop`.
 - Keep the existing streaming reduction path as opt-in correctness coverage.
-- First target is LayerNorm `x[row, :]` only: DMA one row into SPM, reduce mean
-  from SPM, reduce variance from the same SPM row, and normalize from the same
-  SPM row.
+- First target is LayerNorm `x[row, :]` only: materialize one row into SPM,
+  reduce mean, reduce variance from the same SPM row, and normalize from the
+  same SPM row.
 - Keep `gamma` and `beta` on the cache path in the first version unless their
   cross-row reuse is made explicit by a later schedule.
 
@@ -179,9 +180,11 @@ Implemented in D2:
   `x[row, :]`: mean, variance, and normalize.
 - Accepted candidates must use rank-1 contiguous fp32 `x` loads, static loop
   bounds/step, and a row footprint within the row-resident budget.
-- The lowering emits one row DMA and one wait per program row, then rewrites
-  only the `x` loads in mean/variance/normalize to read from SPM.  `gamma` and
-  `beta` stay on the cache path.
+- The current lowering uses fill-on-first-pass materialization: the mean pass
+  keeps the original vector read and writes each loaded `x` chunk into SPM,
+  while variance and normalize read `x` from SPM. This avoids one row DMA
+  descriptor and wait per program row. `gamma` and `beta` stay on the cache
+  path.
 - `TRITON_ENABLE_SPM_REDUCTIONS=1` still exercises the older streaming
   reduction coverage path.  If both reduction flags are set, the row-resident
   path stays separate and the streaming path is not mixed in.
@@ -212,25 +215,33 @@ D2 validation results:
   passed and still emits non-empty tier evidence for the old path.
 - New row-resident opt-in:
   `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=true EXPECT_TIER_JSON=empty EXPECT_PROMOTION_SOURCE='LayerNorm x row'`
-  passed.  The promotion sidecar records `accepted_d2_opt_in_row_resident`; the
-  tier sidecar remains `{}`.
+  passed.  The promotion sidecar records
+  `accepted_fill_on_first_pass_row_resident`; the tier sidecar remains `{}`.
 - Both flags together:
   `TRITON_ENABLE_SPM_REDUCTIONS=1 TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1`
   still verifies as row-resident evidence with an empty tier sidecar, proving the
   old streaming coverage path is not mixed into D2.
-- Performance is still cache-favorable.  32x64 measured 10,279 SPM cycles vs
-  6,138 cache cycles (`+67.5%`).  512x1024 measured 1,245,422 SPM cycles vs
-  1,012,922 cache cycles (`+23.0%`).
+- Original row-DMA performance was cache-favorable.  32x64 measured 10,279 SPM
+  cycles vs 6,138 cache cycles (`+67.5%`).  512x1024 measured 1,245,422 SPM
+  cycles vs 1,012,922 cache cycles (`+23.0%`). The m5out stats pointed at the
+  implementation flaw: `system.spm_dma.waitStallCycles` was 3,000 cycles for
+  32x64 and 428,338 cycles for 512x1024.
+- Fill-on-first-pass performance removes that DMA artifact and is near parity:
+  32x64 measured 6,150 SPM cycles vs 5,892 cache cycles (`+4.4%`);
+  512x1024 measured 1,015,917 SPM cycles vs 1,011,115 cache cycles (`+0.5%`).
+  Both runs report zero DMA transfers and zero DMA wait stall cycles on the
+  row-resident path.
 
 D2 conclusion:
 
 - The prototype proves the compiler can explicitly promote a whole row and
   explain the decision without changing the default policy.
-- The prototype must remain opt-in because it does not beat or match cache on
-  the required 32x64 and 512x1024 comparisons.
-- D3 may now start with a conservative profitability/rejection model.  D3 should
-  keep the D1/D2 sidecar as evidence only, not as a planner or scheduling
-  interface.
+- The old "row-resident reductions lose badly" conclusion was not stable; it
+  was partly caused by serialized row DMA/wait overhead. The current prototype
+  remains opt-in because it is near parity rather than a clear win, but it is a
+  live optimization candidate.
+- D3 should keep the D1/D2 sidecar as evidence only, not as a planner or
+  scheduling interface.
 
 Only after D3 or later validation:
 
@@ -240,8 +251,8 @@ Only after D3 or later validation:
 
 ### D3. Use A Conservative Profitability Gate Before Default Promotion
 
-D3 status (2026-05-03): **completed as a conservative opt-in policy/evidence
-gate; no default promotion enabled**.
+D3 status (2026-05-03): **active conservative opt-in policy/evidence gate; no
+default reduction promotion enabled**.
 
 First step:
 
@@ -268,11 +279,11 @@ Implemented in D3:
   `streaming_reduction_no_residency`: each chunk has one compute use and no
   bounded SPM lifetime.  The old `TRITON_ENABLE_SPM_REDUCTIONS=1` coverage path
   remains available when D3 profitability is off.
-- With D3 profitability enabled, the D2 row-resident LayerNorm prototype is
-  rejected before lowering on current shapes.  32x64 reports
-  `insufficient_row_work`; 512x1024 falls under the measured D2 regression
-  guard.  The row-resident D2 opt-in path remains available when D3
-  profitability is off.
+- With D3 profitability enabled, streaming LayerNorm reductions are rejected.
+  The fill-on-first-pass row-resident LayerNorm path rejects small rows as
+  `insufficient_row_work` and accepts larger rows as opt-in evidence once the
+  DMA descriptor/wait overhead is removed from the model. Default LayerNorm
+  remains cache path unless explicitly requested.
 - Existing fused matmul promotion records get D3 accept evidence for the
   already-performing cases: B window as `accepted_reused_loop_window` and
   accumulator tile as `accepted_bounded_temporary`.
@@ -300,9 +311,13 @@ D3 validation results:
 - D2 row-resident opt-in still works when D3 profitability is off:
   `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=true EXPECT_TIER_JSON=empty EXPECT_PROMOTION_SOURCE='LayerNorm x row'`
   passed.
-- D3 rejects row-resident LayerNorm:
+- D3 rejects small row-resident LayerNorm:
   `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=false EXPECT_TIER_JSON=empty EXPECT_REJECTION_REASON='insufficient_row_work'`
   passed.
+- D3 accepts the large fill-on-first-pass row-resident LayerNorm candidate as
+  opt-in evidence:
+  `python3 ./scripts/run_experiment.py layer_norm --mode verify --tag fill-row-d3-accept-512x1024 --set M=512 --set N=1024 --env TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 --env TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 --env TRITON_SPM_PROMOTION_REPORT=1 --expect-spm true --expect-tier-json empty --expect-promotion-source 'LayerNorm x row'`
+  passed with SPM markers, no `fence iorw`, and an empty tier sidecar.
 - D3 rejects old streaming reduction and keeps placement clean:
   `make verify-layer_norm ENV='TRITON_ENABLE_SPM_REDUCTIONS=1 TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=false EXPECT_TIER_JSON=empty EXPECT_REJECTION_REASON='streaming_reduction_no_residency'`
   passed.
@@ -314,10 +329,10 @@ D3 conclusion:
   candidates.
 - No row/block-resident reduction path is default-enabled.  Reduction SPM
   remains explicit opt-in coverage or evidence only.
-- Gate A is structurally closed for the current single-kernel set: matmul has
-  accepted promotion evidence, cache-only elementwise kernels stay clean, and
-  reduction candidates are rejected unless explicitly bypassing the D3 gate for
-  experiments.
+- Gate A is not a final reduction-performance closure. Matmul has accepted
+  promotion evidence and cache-only elementwise kernels stay clean, but the
+  LayerNorm fill-on-first-pass result shows that reduction candidates need a
+  reuse-aware schedule and measured threshold before being declared settled.
 
 Only after this validation:
 
@@ -376,9 +391,12 @@ and live_spm_bytes(scope) <= SPM capacity
 and the access pattern is statically describable
 ```
 
-This makes LayerNorm's current reduction SPM fail the profitability test:
-each 8-float chunk has too little reuse per DMA transaction, and the pass reads
-`x` across separate passes instead of keeping the row resident.
+This makes the old streaming LayerNorm reduction SPM fail the profitability
+test: each 8-float chunk has too little reuse per DMA transaction, and the pass
+reads `x` across separate passes instead of keeping the row resident. The
+fill-on-first-pass row-resident prototype is the counterexample: it keeps the
+first read on the cache/DRAM path, materializes the row into SPM, and then
+reuses that row without DMA waits.
 
 ## Scopes
 
@@ -408,8 +426,10 @@ multiple passes.
 LayerNorm example for small/medium N:
 
 ```text
-DMA x[row, :] once into SPM
-mean = reduce(spm_x)
+for x chunk in row:
+  x_vec = read original x
+  write x_vec to spm_x
+  mean += reduce(x_vec)
 var  = reduce(spm_x)
 normalize using spm_x + gamma/beta
 ```
@@ -481,10 +501,11 @@ else:
 This should be a separate experiment from the existing `transformReductionLoop`.
 The existing streaming reduction SPM path has already shown poor performance.
 
-First target completed: LayerNorm with `N <= 1024` and `BLOCK_N = 8`.  It emits
-one row DMA per program row and reuses that row across three `x` uses, while
-leaving `gamma` and `beta` cached.  The experiment still loses to cache, so it
-remains opt-in evidence for D3 rather than a default policy.
+First target status: LayerNorm with `N <= 1024` and `BLOCK_N = 8` now uses
+fill-on-first-pass row residency, reusing `x` across three logical uses while
+leaving `gamma` and `beta` cached. The experiment has improved from a large
+regression to near parity, so it remains opt-in evidence and the next reduction
+optimization target rather than a default policy.
 
 ### P2: Promotion Profitability Analysis
 
@@ -545,15 +566,15 @@ Steps:
    and rejected candidates.  D1 now exports stable evidence fields and
    structural rejection records. D3 may add measured profitability scores later,
    but it should not turn the D1 evidence sidecar into a planner contract.
-4. **LayerNorm row-resident prototype**: done in D2 as a separate opt-in path
-   that copies one row of `x` once and reuses it across
-   mean/variance/normalize.
+4. **LayerNorm row-resident prototype**: active in D2 as a separate opt-in path
+   that materializes one row of `x` during the first pass and reuses it across
+   variance/normalize.
 5. **Single-kernel profitability gate**: keep reduction SPM default-off unless
-   row-resident promotion beats or matches cache on 32x64 and 512x1024. D2 did
-   not meet this bar, so D3 must implement a conservative profitability gate
-   before any default enablement. Done in D3: current streaming and
-   row-resident LayerNorm candidates are rejected by the static gate, while the
-   existing fused matmul schedule receives accept evidence.
+   row-resident promotion beats or matches cache on 32x64 and 512x1024. The
+   fill-on-first-pass prototype reaches near parity but not a clear win, so D3
+   remains a conservative evidence gate rather than a default enablement. The
+   existing fused matmul schedule receives accept evidence; streaming
+   reductions and small row-resident reductions reject.
 6. ~~**Workload breadth**: add at least one more reduction/streaming workload
    such as softmax and at least one cache-only elementwise/residual workload to
    show the gate can both promote and reject.~~ Done for first smoke coverage
@@ -568,10 +589,10 @@ kernel set: matmul promotes, cache-only elementwise kernels stay clean, and
 LayerNorm/softmax promote only when the row/block-resident strategy is measured
 profitable.
 
-As of D3, Gate A is structurally closed for the current coverage but not a
-claim that LayerNorm/softmax SPM should be enabled: the automatic policy is
-conservative, so reductions remain cache path unless a future measured schedule
-beats the gate.
+As of the fill-on-first-pass re-audit, Gate A is structurally useful but not
+closed as a reduction-performance claim: reductions remain cache path by
+default, and the next task is to turn near-parity row residency into a measured
+win before broadening to softmax.
 
 ### Gate B: Multi-Kernel / Fusion Promotion
 

@@ -129,6 +129,10 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
         "expect_tier_json",
         "non_empty" if expect_spm else "empty",
     )
+    expect_dma = bool(verify_cfg.get(
+        "expect_dma",
+        expect_spm and expect_tier_json == "non_empty",
+    ))
     expect_promotion_source = verify_cfg.get("expect_promotion_source")
     expect_rejection_reason = verify_cfg.get("expect_rejection_reason")
 
@@ -160,7 +164,10 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
         n_fence = len(re.findall(r"fence iorw", text))
         if expect_spm:
             check("spm llir has addrspace(3)", n_addrspace > 0, f"count={n_addrspace}")
-            check("spm llir has fence iorw", n_fence > 0, f"count={n_fence}")
+            if expect_dma:
+                check("spm llir has fence iorw", n_fence > 0, f"count={n_fence}")
+            else:
+                check("spm llir clean of fence iorw", n_fence == 0, f"count={n_fence}")
         else:
             check("spm llir clean of addrspace(3)", n_addrspace == 0, f"count={n_addrspace}")
             check("spm llir clean of fence iorw", n_fence == 0, f"count={n_fence}")
