@@ -167,8 +167,9 @@ Validation run:
 - `workloads/scripts/phase35_baseline.sh verify`
 - `make -C workloads verify-matmul`
 
-Next: P2 fill-on-first-pass overhead reduction.  The scheduler still needs a
-measured performance win before reduction promotion can become the default.
+Next: P2 fill-on-first-pass overhead reduction, plus a row-block DMA
+double-buffer design probe.  The scheduler still needs a measured performance
+win before reduction promotion can become the default.
 
 ## Work Items
 
@@ -228,8 +229,8 @@ Tasks:
   - producer pass (`fill_on_first_pass`, `producer_store`, or `dma_prefetch`),
   - consumer passes,
   - required SPM slots,
-  - buffer role (`resident_row`, `ping_pong_chunk`, `temp_vector`,
-    `output_tile`),
+  - buffer role (`resident_row`, future `resident_row_block`,
+    `ping_pong_chunk`, `temp_vector`, `output_tile`),
   - rotation policy (`none`, `double_buffer`, `ring_N`).
 - Keep LayerNorm as the first concrete lowering.
 - Add Softmax matching after LayerNorm only for a schedule with real memory
@@ -266,10 +267,48 @@ Tasks:
 - Do not make streaming DMA reduction default unless it beats the resident
   plan; it is now a fallback/debug path.
 
+P2b candidate: row-block DMA double buffering.
+
+This is a different idea from the old streaming reduction DMA path.  The old
+path DMAed tiny per-loop chunks and paid descriptor/MMIO/wait overhead for each
+small piece of reuse, which is why it lost badly.  A more plausible DMA-based
+reduction schedule is to stage a **block of rows** at a time:
+
+1. DMA rows `[r, r + R)` into SPM buffer A using one coarse 2D row-block copy
+   or a small bounded descriptor group.
+2. Compute all reduction passes for those `R` rows, reusing the resident
+   row-block from SPM.
+3. While computing buffer A, prefetch rows `[r + R, r + 2R)` into SPM buffer B.
+4. Swap A/B and continue.
+
+The expected benefit is descriptor/wait amortization: one DMA phase feeds many
+row computations and multiple row passes.  For LayerNorm this means mean,
+variance, and normalize/store reuse the same row-block.  For Softmax this
+means max, exp/sum, and normalize/store reuse the same row-block.  This should
+be represented as `producer_pass = dma_prefetch`, `buffer_role =
+resident_row_block` or `ping_pong_chunk`, and `rotation_policy =
+double_buffer`.
+
+Admission requirements before implementation:
+
+- The kernel schedule must process a row block, not only one row/program.
+- SPM must fit two input row-block buffers plus per-row temporaries:
+  roughly `2 * R * N * elem_bytes + temps`.
+- Rows must be contiguous or cheaply describable by a bounded 2D DMA
+  descriptor sequence.
+- `R * row_compute` must be large enough to hide or amortize DMA wait and MMIO
+  overhead.
+- The DMA wait placement must not reintroduce the RVV codegen/fence regression
+  seen in earlier DMA paths.
+- Small rows should still reject; this is meant for large rows or multi-row
+  batches where reuse and overlap can pay for DMA setup.
+
 Exit criteria:
 
 - LayerNorm 512x1024 is at least break-even under flushed ROI.
 - 32x64 either breaks even or has an explained small-row rejection threshold.
+- Row-block DMA double buffering has a buildable prototype or a documented
+  rejection with measured descriptor/wait overhead and SPM-capacity math.
 
 ### P3. Profitability Gate Refit
 
