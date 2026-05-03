@@ -230,10 +230,9 @@ Conclusion:
   and large fill-on-first-pass is near parity, but there is no stable win on
   both required shapes.
 
-Next: P3 profitability refit.  Accept measured Softmax large-row SPM evidence
-behind a deterministic gate, keep LayerNorm thresholds conservative, and leave
-row-block DMA double buffering as the next coarse-grained alternative if more
-LayerNorm/Softmax shapes need overlap or descriptor amortization.
+Next: stay in P2 and try the row-block DMA alternative.  Do not move to the P3
+profitability refit until the row-block DMA evidence says whether coarse
+row-block staging is a useful alternative to CPU-direct fill-on-first-pass.
 
 ### 2026-05-03 P2b DMA-Prefetch Probe
 
@@ -287,6 +286,58 @@ Conclusion:
   expose a multi-row block lifetime, so a true row-block double buffer still
   requires a different kernel schedule or pass structure that processes multiple
   rows per program/block and amortizes one coarse DMA phase over many rows.
+
+### 2026-05-03 P2c Softmax Row-Block A/B DMA Prototype
+
+Landed:
+
+- Softmax now has explicit row-block controls: `ROW_BLOCK` and
+  `ROW_GROUP_BLOCKS`.  The default remains the original one-row path; the
+  `phase35-row-block-dma-large-row` preset uses `ROW_BLOCK=4` and
+  `ROW_GROUP_BLOCKS=2` so one program exposes an outer row-block loop.
+- `row_block_dma` now matches that outer loop for Softmax.  The lowering
+  allocates two resident row-block input buffers, emits a prologue DMA for the
+  first row block, waits for the current buffer at the top of each outer-loop
+  iteration, prefetches the next row block into the alternate SPM slot, then
+  runs max, exp/sum, and normalize/store from the current SPM slot.
+- The row-block DMA shape is a coarse full-row-block copy: 1024 columns x 4
+  rows x fp32 = 16 KiB per row block.  The SPM view uses full-row strides, so
+  the compute loops read the same layout that the 2D DMA writes.
+- Promotion evidence records `source = "Softmax x row block"`, scope
+  `program-row-block-group`, `buffer_role = resident_row_block`,
+  `rotation_policy = double_buffer`, and `required_spm_slots = 2`.
+
+Validation run:
+
+- `ninja -C compiler/build/cmake.linux-x86_64-cpython-3.12 triton-opt
+  /home/feige/TriSPM/compiler/python/triton/_C/libtriton.so`
+- Existing CPU-direct Softmax verify:
+  `python3 ./scripts/run_experiment.py softmax --mode verify --preset phase35-row-resident-large-row --expect-spm true --expect-tier-json empty --expect-dma false --expect-promotion-source 'Softmax x row' --expect-residency-plan 'Softmax x row'`
+- Row-block DMA verify:
+  `python3 ./scripts/run_experiment.py softmax --mode verify --preset phase35-row-block-dma-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row block' --expect-residency-plan 'Softmax x row block'`
+- Gem5 flushed ROI compare:
+  `python3 ./scripts/run_experiment.py softmax --mode compare --preset phase35-row-block-dma-large-row`
+
+Measured findings:
+
+| Kernel preset | Schedule | Result |
+|---|---|---|
+| `softmax phase35-row-block-dma-large-row` | true row-block A/B DMA, 16 KiB row-block buffers | 5,346,794 SPM vs 5,101,703 cache cycles (`+4.8%`); 32 2D DMA transfers, 524,288 DMA bytes, 57,169 wait-stall cycles, 0 SPM bank conflicts |
+
+Interpretation:
+
+- This is the first true row-block DMA prototype in the Softmax path.  It is no
+  longer the P2b per-chunk DMA schedule: descriptor count drops from 2,048 in
+  one-row DMA-prefetch, and from 512 in the earlier row-block tile/chunk probe,
+  to 32 full-row-block DMA transfers.
+- The result is correct but still not profitable.  The larger 16 KiB DMA
+  transfers have high latency (`avgLatency` about 3,312 cycles), and the exposed
+  wait stalls rise to 57,169 cycles.  Descriptor pressure is mostly fixed; DMA
+  latency overlap is not.
+- CPU-direct Softmax row residency remains the best measured SPM schedule for
+  this shape (`-6.9%` vs cache).  P2c should therefore keep tuning row-block DMA
+  granularity and overlap rather than moving directly to P3 default-promotion
+  policy.
 
 ## Work Items
 
@@ -387,8 +438,9 @@ Tasks:
 - Do not make streaming DMA reduction default unless it beats the resident
   plan; it is now a fallback/debug path.
 
-P2b result and future candidate: chunk-DMA was measured; true row-block DMA
-still needs a different schedule.
+P2b/P2c result: chunk-DMA was measured and rejected as too descriptor-heavy;
+true Softmax row-block A/B DMA now builds, verifies, and runs, but still loses
+to cache because the coarse 16 KiB DMA latency is not hidden.
 
 This is a different idea from the old streaming reduction DMA path.  The old
 path DMAed tiny per-loop chunks and paid descriptor/MMIO/wait overhead for each
@@ -436,11 +488,10 @@ Exit criteria:
   fill-on-first-pass wins (`-6.9%`), producer-store is weaker (`-0.6%`).
 - Row-block DMA double buffering has a buildable prototype or a documented
   rejection with measured descriptor/wait overhead and SPM-capacity math.
-  P2b built and measured the currently expressible chunk-DMA prefetch variant:
-  Softmax still wins but less than CPU-direct fill-on-first-pass, while
-  LayerNorm strongly regresses because descriptor/wait overhead is paid per
-  chunk.  A true row-block prototype remains separate and still needs a
-  multi-row schedule before it can be judged fairly.
+  P2b built and measured the chunk-DMA prefetch variant; P2c now builds and
+  measures the true Softmax row-block A/B DMA variant.  The descriptor count is
+  down to 32, but the schedule still regresses (`+4.8%`) because full-row-block
+  DMA wait latency is not hidden.
 
 ### P3. Profitability Gate Refit
 

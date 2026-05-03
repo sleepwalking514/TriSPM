@@ -55,10 +55,8 @@ also measured; it reduces SPM reads but is slower for Softmax (`-0.6%`) and
 bad for large LayerNorm (`+17.6%`), so first-pass fill remains the better
 row-resident schedule.  LayerNorm still does not clear the default bar:
 first-pass large is near parity (`+0.5%`), producer-store small is near parity
-(`+0.3%`), but the large producer-store case regresses.  Next work is P3:
-refit the profitability gate so Softmax large-row can be accepted with measured
-evidence while LayerNorm stays conservative, and keep the row-block DMA
-double-buffer probe as a later coarse-grained alternative to tiny streaming DMA.
+(`+0.3%`), but the large producer-store case regresses.  The P3 profitability
+refit is intentionally parked while the row-block DMA alternative is tested.
 
 Phase 3.5 P2b measured the currently expressible DMA-prefetch variant.  It is
 opt-in via `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=dma_prefetch`: the producer
@@ -69,6 +67,18 @@ descriptor/wait cost per chunk: 32x64 is `+443.6%`, and 512x1024 is `+610.2%`.
 This rejects chunk-DMA for the current one-row program schedule; it does not
 settle a future true row-block DMA schedule, which would need a multi-row
 lifetime to amortize descriptors.
+
+Phase 3.5 P2c now has a true Softmax row-block A/B DMA prototype, still opt-in
+via `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=row_block_dma`.  The Softmax preset
+uses `ROW_BLOCK=4` and `ROW_GROUP_BLOCKS=2`, so the pass can match an outer
+row-block loop, use two 16 KiB SPM input buffers, DMA the next row block while
+computing the current one, and report `resident_row_block` with
+`required_spm_slots=2`.  The flushed ROI compare is correct but not profitable:
+5,346,794 SPM cycles vs 5,101,703 cache cycles (`+4.8%`), with 32 2D DMA
+transfers, 524,288 DMA bytes, 57,169 DMA wait-stall cycles, and zero SPM bank
+conflicts.  This improves over the earlier row-block tile/chunk variant
+(`+6.5%`, 512 transfers), but it does not beat cache or the CPU-direct Softmax
+row-resident schedule.  Current work stays in P2c row-block DMA tuning, not P3.
 
 ## Document Inventory
 
@@ -103,7 +113,7 @@ lifetime to amortize descriptors.
 | Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
 | Current | Active prototype | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
 | Current | Active gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3 | Conservative profitability evidence landed: accepts existing fused matmul evidence, rejects streaming reductions and small row-resident reductions, and can accept large fill-on-first-pass row-resident evidence while default LayerNorm remains cache path. |
-| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P2b is landed as evidence: CPU-direct Softmax large-row remains the best measured SPM schedule, chunk-DMA prefetch is opt-in and weaker, LayerNorm remains opt-in/conservative, and next is D3/P3 profitability refit before any default promotion. |
+| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P2c is active: true Softmax row-block A/B DMA is buildable and correct, but still slower than cache (`+4.8%`), so the next step is row-block DMA granularity/overlap tuning before any D3/P3 profitability refit. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Move to executable attention/fusion and producer-consumer promotion after Phase 3.5 reduction closure. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |

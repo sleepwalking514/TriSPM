@@ -24,6 +24,12 @@
 #ifndef BLOCK_N
 #error "BLOCK_N must be defined via -D flag"
 #endif
+#ifndef ROW_BLOCK
+#define ROW_BLOCK 1
+#endif
+#ifndef ROW_GROUP_BLOCKS
+#define ROW_GROUP_BLOCKS 1
+#endif
 #ifndef SOFTMAX_WARMUP_ITERS
 #define SOFTMAX_WARMUP_ITERS 0
 #endif
@@ -40,12 +46,19 @@
 #if (N % BLOCK_N) != 0
 #error "softmax workload requires N to be divisible by BLOCK_N"
 #endif
+#if (M % ROW_BLOCK) != 0
+#error "softmax row-block workload requires M to be divisible by ROW_BLOCK"
+#endif
+#if (M % (ROW_BLOCK * ROW_GROUP_BLOCKS)) != 0
+#error "softmax row-block workload requires M to be divisible by ROW_BLOCK * ROW_GROUP_BLOCKS"
+#endif
 
 int main(void)
 {
-    printf("softmax: M=%d  N=%d  BLOCK_N=%d  warmup=%d  measure=%d  flush=%d  check=%d\n",
-           M, N, BLOCK_N, SOFTMAX_WARMUP_ITERS, SOFTMAX_MEASURE_ITERS,
-           SOFTMAX_FLUSH_BEFORE_ROI, SOFTMAX_CHECK_RESULT);
+    printf("softmax: M=%d  N=%d  BLOCK_N=%d  ROW_BLOCK=%d  ROW_GROUP_BLOCKS=%d  warmup=%d  measure=%d  flush=%d  check=%d\n",
+           M, N, BLOCK_N, ROW_BLOCK, ROW_GROUP_BLOCKS,
+           SOFTMAX_WARMUP_ITERS, SOFTMAX_MEASURE_ITERS, SOFTMAX_FLUSH_BEFORE_ROI,
+           SOFTMAX_CHECK_RESULT);
 
     size_t bytes = (size_t)M * N * sizeof(float);
     float *x_shadow = (float *)malloc(bytes);
@@ -100,12 +113,12 @@ int main(void)
         flush_caches();
 
     for (int iter = 0; iter < SOFTMAX_WARMUP_ITERS; iter++)
-        softmax_launch(M, 1, 1, x, out);
+        softmax_launch(M / (ROW_BLOCK * ROW_GROUP_BLOCKS), 1, 1, x, out);
 
     m5_reset_stats(0, 0);
 
     for (int iter = 0; iter < SOFTMAX_MEASURE_ITERS; iter++)
-        softmax_launch(M, 1, 1, x, out);
+        softmax_launch(M / (ROW_BLOCK * ROW_GROUP_BLOCKS), 1, 1, x, out);
 
     m5_dump_stats(0, 0);
 
