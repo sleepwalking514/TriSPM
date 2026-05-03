@@ -207,6 +207,8 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
     ))
     expect_promotion_source = verify_cfg.get("expect_promotion_source")
     expect_rejection_reason = verify_cfg.get("expect_rejection_reason")
+    expect_rejection_source = verify_cfg.get("expect_rejection_source")
+    expect_residency_plan = verify_cfg.get("expect_residency_plan")
 
     checks: list[tuple[str, bool]] = []
     all_ok = True
@@ -303,6 +305,40 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
                 f"rejection reason {expect_rejection_reason!r}",
                 expect_rejection_reason in reasons,
                 json.dumps(reasons, separators=(",", ":")),
+            )
+    if expect_rejection_source:
+        promotion_json = spm_dir / f"{kernel}_promotions.json"
+        if not promotion_json.is_file():
+            check("promotion json exists", False, str(promotion_json))
+        else:
+            report = json.loads(promotion_json.read_text())
+            sources = [
+                record.get("source")
+                for record in report.get("rejections", [])
+                if record.get("status") == "rejected"
+            ]
+            check(
+                f"rejection source {expect_rejection_source!r}",
+                expect_rejection_source in sources,
+                json.dumps(sources, separators=(",", ":")),
+            )
+    if expect_residency_plan:
+        promotion_json = spm_dir / f"{kernel}_promotions.json"
+        if not promotion_json.is_file():
+            check("promotion json exists", False, str(promotion_json))
+        else:
+            report = json.loads(promotion_json.read_text())
+            records = report.get("promotions", []) + report.get("rejections", [])
+            matching = [
+                record.get("residency_plan", {})
+                for record in records
+                if record.get("source") == expect_residency_plan
+                and isinstance(record.get("residency_plan"), dict)
+            ]
+            check(
+                f"residency plan for {expect_residency_plan!r}",
+                len(matching) > 0,
+                json.dumps(matching, separators=(",", ":")),
             )
 
     # 4. Launcher has alloc/free_all
@@ -413,6 +449,10 @@ def main() -> None:
                    help="require an accepted promotion source in the debug sidecar")
     p.add_argument("--expect-rejection-reason", default=None,
                    help="require a rejected promotion reason_code in the debug sidecar")
+    p.add_argument("--expect-rejection-source", default=None,
+                   help="require a rejected promotion source in the debug sidecar")
+    p.add_argument("--expect-residency-plan", default=None,
+                   help="require a residency_plan entry for this promotion/rejection source")
     args = p.parse_args()
 
     manifest = load_manifest(args.kernel)
@@ -439,6 +479,8 @@ def main() -> None:
         or args.expect_tier_json is not None
         or args.expect_promotion_source is not None
         or args.expect_rejection_reason is not None
+        or args.expect_rejection_source is not None
+        or args.expect_residency_plan is not None
     ):
         manifest = dict(manifest)
         kernel_cfg = dict(manifest["kernel"])
@@ -451,6 +493,10 @@ def main() -> None:
             verify_cfg["expect_promotion_source"] = args.expect_promotion_source
         if args.expect_rejection_reason is not None:
             verify_cfg["expect_rejection_reason"] = args.expect_rejection_reason
+        if args.expect_rejection_source is not None:
+            verify_cfg["expect_rejection_source"] = args.expect_rejection_source
+        if args.expect_residency_plan is not None:
+            verify_cfg["expect_residency_plan"] = args.expect_residency_plan
         kernel_cfg["verify"] = verify_cfg
         manifest["kernel"] = kernel_cfg
 

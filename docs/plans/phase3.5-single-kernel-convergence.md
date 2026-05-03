@@ -138,20 +138,37 @@ Full baseline results:
   `phase35-large-row` measured 7,705,586 vs 7,700,781 cycles (`+0.1%`);
   these numbers are runtime/cache noise, not SPM wins.
 
-Next: P1a Reduction Residency Plan Extraction
+### 2026-05-03 P1a Reduction Residency Plan Extraction
 
-1. Extract a common `ReductionResidencyPlan` data structure from the current
-   LayerNorm-only matcher without changing generated LayerNorm IR.
-2. Make the LayerNorm matcher produce a plan first, then lower that plan through
-   the existing CPU-direct row-resident schedule.
-3. Extend promotion evidence with plan fields: producer pass, consumer passes,
-   buffer role, rotation policy, CPU-direct vs DMA copy-in, and expected
-   SPM/stat markers.
-4. Add Softmax large-row detection that emits a clean rejected/unsupported
-   plan record before any Softmax SPM lowering exists.  Softmax remains
-   cache-path IR until a measured block-resident lowering is added.
-5. Validate P1a with focused lit tests plus
-   `workloads/scripts/phase35_baseline.sh verify`.
+Landed:
+
+- The row-resident reduction path now uses an internal
+  `ReductionResidencyPlan`: matcher -> plan -> lowering.  The first concrete
+  lowering is still LayerNorm fill-on-first-pass CPU-direct row residency, so
+  generated LayerNorm IR stays on the same SPM/no-DMA schedule.
+- Promotion sidecars now include `residency_plan` evidence for row-resident
+  reductions: producer pass, consumer passes, buffer role, rotation policy,
+  copy-in mode, required SPM slots, and expected SPM/stat markers.
+- Softmax row-resident detection now recognizes the Phase 3.5 large-row
+  three-pass pattern (`max`, `exp_sum`, `normalize_store`) and emits a clean
+  rejected `Softmax x row` plan with
+  `unsupported_reduction_residency_plan`.  Because no Softmax lowering exists
+  yet, its IR remains cache path with no `addrspace(3)`.
+- `run_experiment.py`, the workload Makefile, and
+  `phase35_baseline.sh verify` can now check rejection source and
+  `residency_plan` evidence directly.
+
+Validation run:
+
+- `ninja -C compiler/build/cmake.linux-x86_64-cpython-3.12 triton-opt`
+- `ninja -C compiler/build/cmake.linux-x86_64-cpython-3.12 /home/feige/TriSPM/compiler/python/triton/_C/libtriton.so`
+- `lit -sv .../test/TritonCPU/convert-memory-to-spm-row-resident.mlir`
+- `lit -sv .../test/TritonCPU/convert-memory-to-spm-promotion-report.mlir`
+- `workloads/scripts/phase35_baseline.sh verify`
+- `make -C workloads verify-matmul`
+
+Next: P2 fill-on-first-pass overhead reduction.  The scheduler still needs a
+measured performance win before reduction promotion can become the default.
 
 ## Work Items
 
@@ -198,14 +215,14 @@ Files:
 Tasks:
 
 - Replace the LayerNorm-only row-resident record with a generic
-  `ReductionResidencyPlan`.
+  `ReductionResidencyPlan`.  Done in P1a for the internal plan/evidence shape.
 - Treat this as a medium refactor, not a rename: the existing matcher is
   LayerNorm-specific and assumes three same-shape top-level loops.  The first
   landing should separate common evidence/lifetime/planning data from
   kernel-specific schedule templates.
 - P1a scope: preserve current LayerNorm IR while changing the internal shape to
-  `match -> ReductionResidencyPlan -> lower`.  Do not optimize performance in
-  this step.
+  `match -> ReductionResidencyPlan -> lower`.  Done; performance was not
+  optimized in this step.
 - Represent:
   - source arg / row or block shape,
   - producer pass (`fill_on_first_pass`, `producer_store`, or `dma_prefetch`),
@@ -217,13 +234,17 @@ Tasks:
 - Keep LayerNorm as the first concrete lowering.
 - Add Softmax matching after LayerNorm only for a schedule with real memory
   reuse: max pass, exp/sum pass, normalize/store over a multi-block row, or a
-  clearly rejected single-block record.
+  clearly rejected single-block record.  P1a detects the large-row reuse shape
+  and leaves a rejected unsupported plan record; Softmax lowering remains P2+
+  work.
 
 Exit criteria:
 
-- LayerNorm still emits fill-on-first-pass SPM with no DMA fences.
-- Softmax has an opt-in row/block-resident SPM path with promotion evidence.
-- Unsupported reductions leave clean rejection records and cache-path IR.
+- P1a complete: LayerNorm still emits fill-on-first-pass SPM with no DMA
+  fences, and unsupported Softmax row residency leaves clean rejection records
+  plus cache-path IR.
+- Remaining P1/P2 work: add a measured Softmax row/block-resident lowering
+  before treating Softmax as an accepted SPM promotion path.
 
 ### P2. Reduce Fill-On-First-Pass Overhead
 

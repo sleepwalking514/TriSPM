@@ -31,26 +31,37 @@ run_verify() {
     run_cmd make -C "$WORKLOADS_DIR" verify-layer_norm
     run_cmd make -C "$WORKLOADS_DIR" verify-softmax
     run_cmd python3 "$DRIVER" softmax --mode verify --preset phase35-large-row
+    run_cmd python3 "$DRIVER" softmax --mode verify \
+        --preset phase35-row-resident-large-row \
+        --expect-spm false \
+        --expect-tier-json empty \
+        --expect-rejection-source "Softmax x row" \
+        --expect-rejection-reason unsupported_reduction_residency_plan \
+        --expect-residency-plan "Softmax x row"
     run_cmd python3 "$DRIVER" layer_norm --mode verify \
         --preset phase35-row-resident-small \
         --expect-spm true \
         --expect-tier-json empty \
-        --expect-promotion-source "LayerNorm x row"
+        --expect-promotion-source "LayerNorm x row" \
+        --expect-residency-plan "LayerNorm x row"
     run_cmd python3 "$DRIVER" layer_norm --mode verify \
         --preset phase35-row-resident-large \
         --expect-spm true \
         --expect-tier-json empty \
-        --expect-promotion-source "LayerNorm x row"
+        --expect-promotion-source "LayerNorm x row" \
+        --expect-residency-plan "LayerNorm x row"
     run_cmd python3 "$DRIVER" layer_norm --mode verify \
         --preset phase35-d3-small \
         --expect-spm false \
         --expect-tier-json empty \
-        --expect-rejection-reason insufficient_row_work
+        --expect-rejection-reason insufficient_row_work \
+        --expect-residency-plan "LayerNorm x row"
     run_cmd python3 "$DRIVER" layer_norm --mode verify \
         --preset phase35-d3-large \
         --expect-spm true \
         --expect-tier-json empty \
-        --expect-promotion-source "LayerNorm x row"
+        --expect-promotion-source "LayerNorm x row" \
+        --expect-residency-plan "LayerNorm x row"
 }
 
 run_smoke() {
