@@ -146,7 +146,8 @@ Only after D1 validation:
 ### D2. Keep Row-Resident Reduction Separate From Streaming Reduction
 
 D2 status (2026-05-03): **active opt-in prototype; LayerNorm remains
-conservative, Softmax large-row now has a measured SPM win**.
+conservative, Softmax large-row has a measured CPU-direct SPM win, and
+chunk-DMA prefetch is measured but not preferred**.
 
 First step:
 
@@ -190,6 +191,11 @@ Implemented in D2:
   A `producer_store` variant is available through
   `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=producer_store` for measurement, but
   it is evidence rather than the preferred schedule.
+- P2b adds `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=dma_prefetch` as another
+  opt-in row-resident schedule.  It DMA-prefetches the currently exposed row
+  chunks into the resident row buffer, then later passes reuse the row from SPM.
+  This is not the future multi-row row-block double buffer; the current kernel
+  schedule still pays descriptor/wait overhead per chunk.
 - `TRITON_ENABLE_SPM_REDUCTIONS=1` still exercises the older streaming
   reduction coverage path.  If both reduction flags are set, the row-resident
   path stays separate and the streaming path is not mixed in.
@@ -246,6 +252,13 @@ D2 validation results:
   7,709,817 cache cycles (`-6.9%`) with zero DMA/fence markers.  The
   producer-store variant measured 7,658,442 vs 7,706,343 cycles (`-0.6%`), so
   first-pass fill is the preferred Softmax row-resident schedule.
+- P2b DMA-prefetch measurements reject the currently expressible chunk-DMA
+  schedule as a preferred path.  Softmax large-row measured 7,398,839 SPM vs
+  7,707,609 cache cycles (`-4.0%`) with 2,048 DMA transfers and 166,326
+  wait-stall cycles, so it is positive but weaker than CPU-direct
+  fill-on-first-pass.  LayerNorm is much worse: 32x64 measured 30,538 vs 5,618
+  cycles (`+443.6%`), and 512x1024 measured 7,178,094 vs 1,010,763 cycles
+  (`+610.2%`) with 65,536 DMA transfers on the large case.
 
 D2 conclusion:
 
@@ -254,7 +267,11 @@ D2 conclusion:
 - The old "row-resident reductions lose badly" conclusion was not stable; it
   was partly caused by serialized row DMA/wait overhead. The current prototype
   remains opt-in for LayerNorm because it is near parity rather than a clear
-  win, but Softmax large-row is now a live measured SPM win candidate.
+  win, but Softmax large-row is now a live measured CPU-direct SPM win
+  candidate.
+- P2b shows that merely switching the row-resident producer to DMA is not
+  enough.  A true DMA row-block design still needs a kernel schedule with a
+  multi-row lifetime so descriptors can be amortized across enough work.
 - D3 should keep the D1/D2 sidecar as evidence only, not as a planner or
   scheduling interface.
 
@@ -604,16 +621,18 @@ kernel set: matmul promotes, cache-only elementwise kernels stay clean, and
 LayerNorm/softmax promote only when the row/block-resident strategy is measured
 profitable.
 
-As of the P2a re-audit, Gate A is structurally useful but not closed as a
+As of the P2b re-audit, Gate A is structurally useful but not closed as a
 default reduction-performance policy.  Reductions remain cache path by default:
-Softmax large-row has a measured row-resident SPM win, but LayerNorm still
-needs conservative thresholds and D3 must be refit before automatic promotion.
+Softmax large-row has a measured CPU-direct row-resident SPM win, chunk-DMA
+prefetch is weaker and harmful for LayerNorm, and D3 must be refit before
+automatic promotion.
 
 Phase 3.5 owns that next task.  See
 `phase3.5-single-kernel-convergence.md` for the concrete pass/code plan:
 generic reduction admission/lifetime/evidence, explicit buffer role and
 rotation modeling, LayerNorm overhead reduction, measured Softmax
-row-resident evidence, and D3 profitability refit.
+row-resident evidence, measured DMA-prefetch rejection evidence, and D3
+profitability refit.
 
 ### Gate B: Multi-Kernel / Fusion Promotion
 

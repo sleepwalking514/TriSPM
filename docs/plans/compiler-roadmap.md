@@ -603,12 +603,15 @@ row-DMA result was dominated by serialized DMA wait, and fill-on-first-pass
 improved LayerNorm to near parity (current large-row evidence remains about
 `+0.5%`).  Phase 3.5 P2a then extended the same CPU-direct row-resident
 lowering to Softmax: 128x1024 / BLOCK_N=64 measured 7,174,501 SPM cycles vs
-7,709,817 cache cycles (`-6.9%`) with zero DMA/fence markers.  D3 therefore
-remains a conservative evidence gate, not a final reduction-performance closure:
-it accepts fused matmul evidence, rejects streaming reductions and small
+7,709,817 cache cycles (`-6.9%`) with zero DMA/fence markers.  P2b measured the
+currently expressible DMA-prefetch row-resident variant as an opt-in path:
+Softmax remains positive but weaker (`-4.0%`), while LayerNorm regresses badly
+because descriptors and waits are paid per chunk.  D3 therefore remains a
+conservative evidence gate, not a final reduction-performance closure: it
+accepts fused matmul evidence, rejects streaming reductions and small
 row-resident reductions, can accept large fill-on-first-pass LayerNorm as
 opt-in evidence, and now needs a profitability refit for measured Softmax
-row-resident wins while default LayerNorm stays cache path. See
+CPU-direct row-resident wins while default LayerNorm stays cache path. See
 `spm-explicit-promotion.md` and `phase3.5-single-kernel-convergence.md`.
 
 First targets:
@@ -619,7 +622,9 @@ First targets:
 - Prototype row-resident reduction paths that materialize `x[row, :]` and
   reuse it across later passes, instead of streaming small chunks repeatedly.
   LayerNorm is done as opt-in evidence only; Softmax large-row now has a
-  measured CPU-direct SPM win.  Phase 3.5 owns the D3 profitability refit.
+  measured CPU-direct SPM win.  The measured DMA-prefetch variant is evidence
+  against chunk-DMA for the current one-row schedule, not closure of the future
+  row-block DMA idea.  Phase 3.5 owns the D3 profitability refit.
 - Keep reduction SPM default-off unless the promotion path beats cache on the
   existing 32x64 and 512x1024 comparisons.  LayerNorm fill-on-first-pass is
   near parity but not yet a clear default; Softmax large-row is promising.

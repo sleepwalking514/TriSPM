@@ -92,6 +92,15 @@ automatically:
   `producer_store` probe reduced SPM reads but was weaker for Softmax and bad
   for large LayerNorm, so first-pass fill remains the preferred row-resident
   schedule.
+- Phase 3.5 P2b adds an opt-in
+  `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=dma_prefetch` schedule.  This is the
+  currently expressible chunk-DMA prefetch into a resident row, not the future
+  multi-row row-block double buffer.  Softmax large-row still beats cache at
+  `-4.0%`, but it is weaker than CPU-direct fill-on-first-pass; LayerNorm
+  regresses badly (`+443.6%` small, `+610.2%` large) because descriptor/wait
+  overhead is still paid per chunk.  P2b therefore records DMA-prefetch as
+  evidence against this one-row schedule, while leaving true row-block DMA as a
+  later scheduling problem.
 - Explicit promotion D3 has landed as a conservative opt-in profitability gate.
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the

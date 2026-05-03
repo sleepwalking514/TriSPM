@@ -445,6 +445,8 @@ def main() -> None:
                    help="override [kernel].expect_spm for verify mode")
     p.add_argument("--expect-tier-json", choices=("empty", "non_empty"), default=None,
                    help="override verify tier sidecar expectation")
+    p.add_argument("--expect-dma", choices=("true", "false"), default=None,
+                   help="override verify DMA/fence marker expectation")
     p.add_argument("--expect-promotion-source", default=None,
                    help="require an accepted promotion source in the debug sidecar")
     p.add_argument("--expect-rejection-reason", default=None,
@@ -477,6 +479,7 @@ def main() -> None:
     if (
         args.expect_spm is not None
         or args.expect_tier_json is not None
+        or args.expect_dma is not None
         or args.expect_promotion_source is not None
         or args.expect_rejection_reason is not None
         or args.expect_rejection_source is not None
@@ -489,6 +492,8 @@ def main() -> None:
             kernel_cfg["expect_spm"] = args.expect_spm == "true"
         if args.expect_tier_json is not None:
             verify_cfg["expect_tier_json"] = args.expect_tier_json
+        if args.expect_dma is not None:
+            verify_cfg["expect_dma"] = args.expect_dma == "true"
         if args.expect_promotion_source is not None:
             verify_cfg["expect_promotion_source"] = args.expect_promotion_source
         if args.expect_rejection_reason is not None:

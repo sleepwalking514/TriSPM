@@ -235,6 +235,59 @@ behind a deterministic gate, keep LayerNorm thresholds conservative, and leave
 row-block DMA double buffering as the next coarse-grained alternative if more
 LayerNorm/Softmax shapes need overlap or descriptor amortization.
 
+### 2026-05-03 P2b DMA-Prefetch Probe
+
+Landed:
+
+- `row-resident-producer-pass=dma_prefetch` is now an opt-in lowering.  The
+  current Triton reduction kernels expose one program row at a time, so this is a
+  **chunk-DMA prefetch into a resident row buffer**, not the full future
+  row-block `[r, r + R)` double buffer.  The producer pass waits for each
+  DMA-filled chunk, prefetches the next chunk while computing the current one,
+  and the later passes read the resident row through `addrspace(3)`.
+- Softmax and LayerNorm manifests now have DMA-prefetch Phase 3.5 presets, and
+  `run_experiment.py --expect-dma` can verify DMA/fence marker expectations
+  separately from CPU-direct row residency.
+
+Validation run:
+
+- `ninja -C compiler/build/cmake.linux-x86_64-cpython-3.12 triton-opt
+  /home/feige/TriSPM/compiler/python/triton/_C/libtriton.so`
+- Softmax DMA verify:
+  `python3 ./scripts/run_experiment.py softmax --mode verify --preset phase35-row-resident-dma-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row' --expect-residency-plan 'Softmax x row'`
+- LayerNorm DMA verify for small and large rows with the same `--expect-dma`
+  policy, source, and residency-plan checks.
+- Existing CPU-direct row-resident verifies for Softmax large-row and LayerNorm
+  large still pass with zero fence markers, proving the DMA path did not replace
+  the preferred fill-on-first-pass lowering.
+- Gem5 flushed ROI compares for:
+  - `softmax phase35-row-resident-dma-large-row`
+  - `layer_norm phase35-row-resident-dma-small`
+  - `layer_norm phase35-row-resident-dma-large`
+
+Measured findings:
+
+| Kernel preset | Schedule | Result |
+|---|---|---|
+| `softmax phase35-row-resident-dma-large-row` | chunk-DMA prefetch into resident row | 7,398,839 SPM vs 7,707,609 cache cycles (`-4.0%`); 2,048 DMA transfers, 524,288 DMA bytes, 166,326 wait-stall cycles |
+| `layer_norm phase35-row-resident-dma-small` | chunk-DMA prefetch into resident row | 30,538 SPM vs 5,618 cache cycles (`+443.6%`); 256 DMA transfers, 8,192 DMA bytes, 8,478 wait-stall cycles |
+| `layer_norm phase35-row-resident-dma-large` | chunk-DMA prefetch into resident row | 7,178,094 SPM vs 1,010,763 cache cycles (`+610.2%`); 65,536 DMA transfers, 2,097,152 DMA bytes, 1,713,120 wait-stall cycles |
+
+Conclusion:
+
+- Softmax DMA-prefetch is a real SPM path and still beats cache on the large-row
+  case, but it is weaker than CPU-direct fill-on-first-pass (`-4.0%` vs
+  `-6.9%`).  The extra DMA descriptors, MMIO/fence cost, and wait polling do not
+  improve the current one-row program schedule.
+- LayerNorm DMA-prefetch should be rejected for the current kernel shape.  It
+  restores the exact tiny-chunk DMA pathology Phase 3.5 was meant to escape:
+  65,536 DMA transfers on the 512x1024 case dominate the run despite row reuse in
+  later passes.
+- This does **not** reject the future row-block DMA idea.  The current IR cannot
+  expose a multi-row block lifetime, so a true row-block double buffer still
+  requires a different kernel schedule or pass structure that processes multiple
+  rows per program/block and amortizes one coarse DMA phase over many rows.
+
 ## Work Items
 
 ### P0. Stabilize The Measurement Baseline
@@ -334,7 +387,8 @@ Tasks:
 - Do not make streaming DMA reduction default unless it beats the resident
   plan; it is now a fallback/debug path.
 
-P2b candidate: row-block DMA double buffering.
+P2b result and future candidate: chunk-DMA was measured; true row-block DMA
+still needs a different schedule.
 
 This is a different idea from the old streaming reduction DMA path.  The old
 path DMAed tiny per-loop chunks and paid descriptor/MMIO/wait overhead for each
@@ -382,8 +436,11 @@ Exit criteria:
   fill-on-first-pass wins (`-6.9%`), producer-store is weaker (`-0.6%`).
 - Row-block DMA double buffering has a buildable prototype or a documented
   rejection with measured descriptor/wait overhead and SPM-capacity math.
-  Still open after P2a; keep it as the next coarse-grained DMA probe, not a
-  blocker for Softmax CPU-direct evidence.
+  P2b built and measured the currently expressible chunk-DMA prefetch variant:
+  Softmax still wins but less than CPU-direct fill-on-first-pass, while
+  LayerNorm strongly regresses because descriptor/wait overhead is paid per
+  chunk.  A true row-block prototype remains separate and still needs a
+  multi-row schedule before it can be judged fairly.
 
 ### P3. Profitability Gate Refit
 
