@@ -28,3 +28,56 @@ c_macros = [
 WARMUP_ITERS = 2
 MEASURE_ITERS = 5
 FLUSH_BEFORE_ROI = 0
+
+[presets.phase35-smoke]
+M = 32
+N = 64
+BLOCK_N = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+
+[presets.phase35-large-row]
+M = 128
+N = 1024
+BLOCK_N = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+
+[presets.phase35-steady-large-row]
+M = 128
+N = 1024
+BLOCK_N = 64
+WARMUP_ITERS = 2
+MEASURE_ITERS = 5
+FLUSH_BEFORE_ROI = 0
+CHECK_RESULT = 1
+
+[preset_env.phase35-row-resident-smoke]
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[preset_env.phase35-row-resident-large-row]
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[presets.phase35-row-resident-smoke]
+M = 32
+N = 64
+BLOCK_N = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+
+[presets.phase35-row-resident-large-row]
+M = 128
+N = 1024
+BLOCK_N = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1

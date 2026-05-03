@@ -19,6 +19,7 @@ Modes:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -78,6 +79,12 @@ def export_env(manifest: dict, params: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def preset_env(manifest: dict, preset: str | None) -> dict[str, str]:
+    if not preset:
+        return {}
+    return {k: str(v) for k, v in manifest.get("preset_env", {}).get(preset, {}).items()}
+
+
 def run(cmd: list[str], env: dict[str, str] | None = None, echo: bool = True) -> None:
     if echo:
         print(f"$ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
@@ -104,6 +111,8 @@ def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
     cache_stats = trispm_paths.roi_stats_path(kernel, "cache", tag)
     compare = trispm_paths.compare_path(kernel, tag)
     spm_only = trispm_paths.spm_stats_path(kernel, tag)
+    compare_csv = trispm_paths.compare_csv_path(kernel, tag)
+    spm_only_csv = trispm_paths.spm_stats_csv_path(kernel, tag)
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "compare_stats.py"),
@@ -112,11 +121,74 @@ def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
         "--measure-iters", str(measure_iters),
         "--output", str(compare),
         "--spm-only-output", str(spm_only),
+        "--csv", str(compare_csv),
+        "--spm-only-csv", str(spm_only_csv),
         "--quiet",
     ]
     run(cmd, echo=False)
     print(f"Compare saved:  {rel_workloads_path(compare)}")
+    print(f"Compare CSV:    {rel_workloads_path(compare_csv)}")
     print(f"SPM-only saved: {rel_workloads_path(spm_only)}")
+    print(f"SPM-only CSV:   {rel_workloads_path(spm_only_csv)}")
+
+
+ARTIFACT_PATTERNS = {
+    "llir": "{kernel}.llir",
+    "asm": "{kernel}.s",
+    "launcher_c": "{kernel}_launcher.c",
+    "promotion_json": "{kernel}_promotions.json",
+    "tier_json": "{kernel}_tiers.json",
+}
+
+
+def count_pattern(text: str, pattern: str) -> int:
+    return len(re.findall(pattern, text))
+
+
+def artifact_rows(kernel: str, tag: str) -> list[dict[str, str | int]]:
+    rows: list[dict[str, str | int]] = []
+    for mode in ("spm", "cache"):
+        build_dir = trispm_paths.build_dir(kernel, mode, tag)
+        for kind, template in ARTIFACT_PATTERNS.items():
+            path = build_dir / template.format(kernel=kernel)
+            if not path.is_file():
+                continue
+            text = path.read_text(errors="replace")
+            line_count = 0 if not text else text.count("\n") + (0 if text.endswith("\n") else 1)
+            rows.append({
+                "mode": mode,
+                "artifact": kind,
+                "path": rel_workloads_path(path),
+                "bytes": path.stat().st_size,
+                "lines": line_count,
+                "addrspace3": count_pattern(text, r"addrspace\(3\)"),
+                "fence_iorw": count_pattern(text, r"fence iorw"),
+                "spm_dma_wait": count_pattern(text, r"spm\.dma\.w|spm_dma_wait"),
+                "spm_dma_enqueue": count_pattern(text, r"spm\.dma|spm_dma_"),
+            })
+    return rows
+
+
+def write_artifact_stats(kernel: str, tag: str) -> None:
+    rows = artifact_rows(kernel, tag)
+    out = trispm_paths.artifact_stats_path(kernel, tag)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    headers = (
+        "mode",
+        "artifact",
+        "path",
+        "bytes",
+        "lines",
+        "addrspace3",
+        "fence_iorw",
+        "spm_dma_wait",
+        "spm_dma_enqueue",
+    )
+    with out.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Artifact stats: {rel_workloads_path(out)}")
 
 
 def do_verify(kernel: str, tag: str, manifest: dict) -> None:
@@ -304,6 +376,8 @@ def execute_one(
         target_params = merged_params(manifest, preset, overrides, mode=run_mode)
         env = export_env(manifest, target_params)
         env.update({k: str(v) for k, v in manifest.get("env", {}).items()})
+        env.update(preset_env(manifest, preset))
+        env.update({k: str(v) for k, v in manifest.get("_cli_env", {}).items()})
         if not skip_build:
             do_build(kernel, run_mode, tag, env)
         if should_run:
@@ -311,6 +385,7 @@ def execute_one(
 
     if mode == "compare":
         do_compare(kernel, tag, int(params.get("MEASURE_ITERS", "1")))
+        write_artifact_stats(kernel, tag)
 
     if mode == "verify":
         ok = do_verify(kernel, tag, manifest)
@@ -357,9 +432,7 @@ def main() -> None:
 
     if cli_env:
         manifest = dict(manifest)
-        env_cfg = dict(manifest.get("env", {}))
-        env_cfg.update(cli_env)
-        manifest["env"] = env_cfg
+        manifest["_cli_env"] = cli_env
 
     if (
         args.expect_spm is not None

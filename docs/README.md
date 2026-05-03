@@ -61,6 +61,13 @@ reduction row/block-resident policy before treating Phase 4 graph/fusion as the
 main line. Phase 4/5/6 graph, attention/fusion, producer-consumer promotion, and
 broader evaluation remain open on top of that corrected single-kernel baseline.
 
+Phase 3.5 P0 baseline tooling has started.  LayerNorm and Softmax now have named
+Phase 3.5 presets, compare runs emit CSV plus build-artifact marker counts, and
+`workloads/scripts/phase35_baseline.sh` provides verify/smoke/full suites.
+Softmax large-row coverage now compiles as a three-pass multi-block row
+baseline, but it still defaults to cache-path IR; identical SPM-enabled/cache
+stats there should not be read as an SPM promotion win.
+
 ## Document Inventory
 
 | Status | File | What it is for |

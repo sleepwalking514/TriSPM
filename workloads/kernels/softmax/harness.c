@@ -10,8 +10,9 @@
 /*
  * Test harness for the Triton-compiled row-wise softmax kernel.
  *
- * Build with -DM=32 -DN=64 -DBLOCK_N=64 (rendered from experiment.toml by
- * run_experiment.py).
+ * Build with -DM=32 -DN=64 -DBLOCK_N=64, or larger Phase 3.5 rows where
+ * N is a multiple of BLOCK_N. Values are rendered from experiment.toml by
+ * run_experiment.py.
  */
 
 #ifndef M
@@ -36,8 +37,8 @@
 #define SOFTMAX_CHECK_RESULT 1
 #endif
 
-#if N != BLOCK_N
-#error "softmax first workload requires N == BLOCK_N"
+#if (N % BLOCK_N) != 0
+#error "softmax workload requires N to be divisible by BLOCK_N"
 #endif
 
 int main(void)
