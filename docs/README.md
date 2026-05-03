@@ -8,65 +8,42 @@ This directory is the navigation layer for the TriSPM project notes. It should a
 
 ## Current Position
 
-As of 2026-05-03, Phase 3 matmul has crossed over under the cold-start headline metric: SPM beats the cache baseline on the current large runs, and the small 64-case is no longer a regression point. Do not quote a fixed headline number here yet; the best SPM and cache blocking choices differ, so the final fair comparison should come from a blocking sweep rather than a single stale point.
+As of 2026-05-03, Phase 3 matmul and compiler robustness are closed for the
+current scope.  Matmul remains the mature SPM performance path, while
+low-reuse elementwise kernels stay on the cache path unless future fusion makes
+SPM residency profitable.  The graph-level conservative placement MVP is also
+landed: intermediate activations default to cacheable Tier 2, selective external
+streaming weights may use Tier 3, and Tier 1/fusion remain later work.
 
-The Phase 3 compiler robustness line is closed for the current matmul/layer_norm/vector_add coverage: `layer_norm` can still opt into mean, variance, and final normalize through SPM, including the multi-load reduction/streaming matcher, and GEMM/reduction bail-out cleanup is implemented and covered by lit tests. However, the stronger "single-kernel SPM policy is converged" claim is no longer accurate for reductions. A 2026-05-03 LayerNorm re-audit found that the old row-resident result was dominated by serialized per-row DMA/wait overhead; a fill-on-first-pass prototype removes that artifact and collapses the gap to near parity. Transformer-facing single-kernel workload coverage has also landed for cache-path `activation` (SiLU), `residual_add`, and row-wise `softmax`; all three have manifests, AOT launchers, flushed ROI harnesses, result checks, `make verify-<kernel>` policy coverage, and gem5 smoke compares in both SPM-enabled and cache-baseline modes. The first graph-level conservative placement build/verify MVP is also in place; executable graph harnesses and attention/fusion work remain open.
+The active compiler gate is Phase 3.5: single-kernel reduction SPM convergence.
+The old streaming reduction SPM path is correctness/coverage only; it still
+loses badly because it emits many tiny DMA transactions.  The newer LayerNorm
+row-resident path is different: it uses CPU-direct SPM residency.  The first
+pass reads `x` from DRAM/cache and writes chunks into SPM with `addrspace(3)`
+stores; later passes read those chunks back from SPM with `addrspace(3)` loads.
+There are no DMA descriptors, waits, or fences on that path.
 
-Important performance caveat: the old streaming reduction SPM path is still only correctness/coverage. It issues many tiny DMA transactions and remains far behind cache even with Tier 2 cacheable inputs. The row-resident LayerNorm path is different: the original DMA-row prototype lost badly (32x64: 10,279 vs 6,138 cycles; 512x1024: 1,245,422 vs 1,012,922 cycles), but the fill-on-first-pass prototype writes each first-pass `x` chunk into SPM and reuses it for variance/normalize. That removes row DMA descriptors and waits, producing 32x64 at 6,150 vs 5,892 cycles (+4.4%) and 512x1024 at 1,015,917 vs 1,011,115 cycles (+0.5%). Default `layer_norm` still verifies as cache path until this becomes a clear win, but reduction SPM should be treated as an active optimization line, not a closed failure.
-
-For end-to-end transformer work, the placement rule is now conservative and graph-aware: keep intermediate activations and kernel outputs cacheable by default, use Tier 3 uncacheable only for external read-only DMA-only streaming inputs/weights, and reserve Tier 1 for future small SPM-resident hot state. See `plans/three-tier-placement.md` §2.1.
-
-The first graph-level placement MVP is an upper-layer build/verify tool, not a
-compiler promotion change: `workloads/scripts/graph_placement.py` reads a graph
-manifest, applies conservative tensor-edge rules, builds per-node SPM artifacts
-with `KERNEL_TIER_OVERRIDE`, and verifies the generated launcher allocation
-dispatch. It proves that intermediate activations stay Tier 2 while external
-DMA-only weights can be Tier 3. It does not yet link or run a multi-kernel graph,
-implement Tier 1, or perform fused SPM promotion.
-
-Explicit SPM promotion D1 is now closed. The existing fused matmul scheduler
-reports B-window, A-micro, and accumulator promotion records without changing
-generated code, and the D1 sidecar now has a versioned debug/evidence schema
-with accepted/rejected status, structural rejection reason codes, exact vs
-estimated field annotations, accepted matmul coverage, reduction/cache-path
-rejection coverage, and report-off coverage. During D1 validation we found and
-fixed an unrelated DMA fence codegen regression: a generic inline-asm memory
-clobber had increased reload pressure and moved 256x256x256 matmul from the
-archived ~1.729M-cycle baseline to ~1.987M cycles. Removing the clobber
-restored the baseline while keeping the real `fence iorw, iorw` instruction.
-D1b no-regression validation kept 64x64x64 SPM-only correctness passing and
-256x256x256 SPM-only at 1,729,209 cycles / 5913 assembly lines. Promotion
-records are still debug/evidence output, not yet a scheduler or profitability
-planner.
-
-Explicit SPM promotion D2 and D3 are landed as opt-in infrastructure, but their
-reduction policy is not settled. D2 now uses a fill-on-first-pass row-resident
-LayerNorm prototype (`TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1`): the mean
-pass reads `x` from the original cache/DRAM path and writes the loaded chunks
-into SPM, then variance and normalize reuse the SPM row while `gamma` / `beta`
-stay cached. D3 records static descriptor/MMIO/wait/fence/byte/use evidence in
-the existing D1 debug sidecar; after the fill-on-first-pass change, large rows
-can be accepted as opt-in evidence while small rows still reject as
-`insufficient_row_work`. The sidecar is still evidence only; it is not a
-planner, scheduler, placement, layout, `windowK`, or profitability interface.
-
-Phase 3 matmul and compiler robustness are converged for the current scope, but
-single-kernel SPM policy is not fully converged for reductions. Matmul is still
-the mature SPM performance path and low-reuse elementwise kernels stay cache
-path. Reduction SPM needs another measured optimization pass: the latest
-LayerNorm data shows the old cache-favorable conclusion was partly caused by a
-serialized DMA implementation artifact, not by an inherent SPM limitation.
-The next compiler gate is Phase 3.5 single-kernel convergence: finish the
-reduction row/block-resident policy before treating Phase 4 graph/fusion as the
-main line. Phase 4/5/6 graph, attention/fusion, producer-consumer promotion, and
-broader evaluation remain open on top of that corrected single-kernel baseline.
-
-Phase 3.5 P0 baseline tooling has started.  LayerNorm and Softmax now have named
+Phase 3.5 P0 baseline tooling is now in place.  LayerNorm and Softmax have named
 Phase 3.5 presets, compare runs emit CSV plus build-artifact marker counts, and
-`workloads/scripts/phase35_baseline.sh` provides verify/smoke/full suites.
-Softmax large-row coverage now compiles as a three-pass multi-block row
-baseline, but it still defaults to cache-path IR; identical SPM-enabled/cache
-stats there should not be read as an SPM promotion win.
+`workloads/scripts/phase35_baseline.sh` provides verify/smoke/full suites.  The
+full baseline shows:
+
+- Default LayerNorm remains cache path: `phase35-small` and `phase35-large`
+  have no SPM markers and are effectively noise-level comparisons.
+- Opt-in LayerNorm CPU-direct row residency really uses SPM but still does not
+  win: 32x64 is +13.6%, and 512x1024 is +0.5%.
+- D3 correctly rejects small LayerNorm rows as `insufficient_row_work`; it can
+  accept large rows as opt-in evidence, but the measured result is still +0.3%,
+  so reduction promotion is not default-enabled.
+- Softmax smoke and large-row runs are cache-path baselines only.  They have no
+  `addrspace(3)`, no promotion sidecar, and identical instruction counts; their
+  small deltas are runtime/cache noise, not SPM wins.
+
+Next work is P1a in `plans/phase3.5-single-kernel-convergence.md`: extract a
+common `ReductionResidencyPlan` from the current LayerNorm-only matcher, keep
+LayerNorm generated IR stable, and add Softmax large-row detection that emits a
+clean rejected/unsupported plan record before any Softmax SPM lowering is
+implemented.
 
 ## Document Inventory
 

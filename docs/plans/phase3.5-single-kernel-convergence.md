@@ -64,6 +64,26 @@ reuse."
 | `DmaOpsToLLVM` | `compiler/third_party/cpu/lib/TritonCPUToLLVM/DmaOpsToLLVM.cpp` | DMA/fence/MMIO lowering | DMA-based SPM paths |
 | workload manifests | `workloads/kernels/*/experiment.toml` | Expected default policy and gem5 smoke shape | all current workloads |
 
+## Terminology: CPU-Direct SPM Residency
+
+The row-resident LayerNorm path is **CPU-direct SPM residency**, not
+DMA-based staging.
+
+It works like this:
+
+- The first reduction pass reads `x` from the normal DRAM/cache path.
+- That same pass writes each loaded vector chunk into SPM through
+  `addrspace(3)` stores.
+- Later passes read `x` back from SPM through `addrspace(3)` loads.
+- There are no DMA descriptors, MMIO programming stores, `spm.dma.w` waits, or
+  `fence iorw` instructions on this path.
+
+So "SPM without DMA" means: **the kernel really uses SPM, but CPU vector
+loads/stores access it directly instead of asking the DMA engine to fill it**.
+Artifact checks should therefore look for `addrspace(3)` with zero DMA/fence
+markers, and stats should show nonzero `system.spm.*` CPU read/write counters
+with `system.spm_dma.transfers = 0`.
+
 ## Progress Log
 
 ### 2026-05-03 P0 Baseline Tooling
@@ -98,29 +118,40 @@ Validation already run:
   cache-path IR.
 - Softmax `phase35-smoke` compare under gem5 with result checking.
 
-Interpretation caveat:
+Full baseline results:
 
-- The Softmax smoke compare showed nearly identical SPM-enabled and
-  cache-baseline stats, and both artifacts have no `addrspace(3)` or DMA
-  markers.  That is expected: default Softmax is still cache path.  Treat that
-  run as a harness/baseline check, not an SPM promotion result.
-- LayerNorm row-resident small remains an opt-in SPM-without-DMA path.  The
-  smoke run generated `addrspace(3)` stores/loads and zero DMA fences, but small
-  rows still have overhead.  It remains evidence for the small-row rejection
-  threshold, not a default-enable result.
+- Default LayerNorm remains cache path.  `phase35-small` measured 5,947 vs
+  6,114 cycles and `phase35-large` measured 1,013,150 vs 1,013,120 cycles;
+  both have `addrspace(3) = 0`, so these are baseline/noise checks.
+- LayerNorm CPU-direct row residency is real but not yet profitable.  The small
+  row run has `addrspace(3) = 44`, zero DMA/fences, and 7,018 vs 6,179 cycles
+  (`+13.6%`).  The large row run has `addrspace(3) = 6`, zero DMA/fences,
+  nonzero `system.spm.*` CPU read/write counters, and 1,015,329 vs 1,010,763
+  cycles (`+0.5%`).
+- D3 behaves as a conservative evidence gate: small rows reject as
+  `insufficient_row_work` and stay cache path; large rows accept as opt-in
+  evidence but still measure slightly slower (1,016,009 vs 1,013,120 cycles,
+  `+0.3%`).  This is not enough to default-enable reduction promotion.
+- Softmax smoke and large-row runs are cache-path baselines.  They have no
+  `addrspace(3)`, no promotion sidecar, and identical instruction counts.
+  `phase35-smoke` measured 46,125 vs 46,245 cycles (`-0.3%`) and
+  `phase35-large-row` measured 7,705,586 vs 7,700,781 cycles (`+0.1%`);
+  these numbers are runtime/cache noise, not SPM wins.
 
-Next:
+Next: P1a Reduction Residency Plan Extraction
 
-1. Run the full Phase 3.5 baseline suite with
-   `workloads/scripts/phase35_baseline.sh full`.
-2. Use the large LayerNorm row-resident/D3 runs to confirm whether 512x1024 is
-   still near break-even after the tooling changes.
-3. Use Softmax `phase35-large-row` as the cache-path baseline before adding any
-   Softmax row/block-resident lowering.  Until that lowering exists, Softmax
-   `spm` mode means SPM-enabled runtime with cache-path IR.
-4. Start P1 by extracting a common `ReductionResidencyPlan` data structure from
-   the current LayerNorm-only matcher, while keeping schedule lowering
-   kernel-specific.
+1. Extract a common `ReductionResidencyPlan` data structure from the current
+   LayerNorm-only matcher without changing generated LayerNorm IR.
+2. Make the LayerNorm matcher produce a plan first, then lower that plan through
+   the existing CPU-direct row-resident schedule.
+3. Extend promotion evidence with plan fields: producer pass, consumer passes,
+   buffer role, rotation policy, CPU-direct vs DMA copy-in, and expected
+   SPM/stat markers.
+4. Add Softmax large-row detection that emits a clean rejected/unsupported
+   plan record before any Softmax SPM lowering exists.  Softmax remains
+   cache-path IR until a measured block-resident lowering is added.
+5. Validate P1a with focused lit tests plus
+   `workloads/scripts/phase35_baseline.sh verify`.
 
 ## Work Items
 
@@ -139,8 +170,8 @@ Tasks:
   large row, and flushed ROI compare.  For Softmax, the large row preset must
   allow `N > BLOCK_N` or introduce a second kernel variant before it is used as
   promotion evidence.
-- Keep policy verification aware of SPM-without-DMA (`addrspace(3)` present,
-  `fence iorw` absent).
+- Keep policy verification aware of CPU-direct SPM residency (`addrspace(3)`
+  present, `fence iorw` absent, and zero DMA transfers).
 - Add CSV fields for reduction-specific counters: SPM CPU reads/writes, DMA
   transfers, DMA wait stall cycles, bank conflicts, `simInsts`, and line count
   if available.
@@ -172,6 +203,9 @@ Tasks:
   LayerNorm-specific and assumes three same-shape top-level loops.  The first
   landing should separate common evidence/lifetime/planning data from
   kernel-specific schedule templates.
+- P1a scope: preserve current LayerNorm IR while changing the internal shape to
+  `match -> ReductionResidencyPlan -> lower`.  Do not optimize performance in
+  this step.
 - Represent:
   - source arg / row or block shape,
   - producer pass (`fill_on_first_pass`, `producer_store`, or `dma_prefetch`),
