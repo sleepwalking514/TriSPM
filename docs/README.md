@@ -8,7 +8,7 @@ This directory is the navigation layer for the TriSPM project notes. It should a
 
 ## Current Position
 
-As of 2026-05-03, Phase 3 matmul and compiler robustness are closed for the
+As of 2026-05-04, Phase 3 matmul and compiler robustness are closed for the
 current scope.  Matmul remains the mature SPM performance path, while
 low-reuse elementwise kernels stay on the cache path unless future fusion makes
 SPM residency profitable.  The graph-level conservative placement MVP is also
@@ -69,16 +69,15 @@ settle a future true row-block DMA schedule, which would need a multi-row
 lifetime to amortize descriptors.
 
 Phase 3.5 P2c now has a true Softmax row-block A/B DMA prototype, still opt-in
-via `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=row_block_dma`.  The Softmax preset
-uses `ROW_BLOCK=4` and `ROW_GROUP_BLOCKS=2`, so the pass can match an outer
-row-block loop, use two 16 KiB SPM input buffers, DMA the next row block while
-computing the current one, and report `resident_row_block` with
-`required_spm_slots=2`.  The flushed ROI compare is correct but not profitable:
-5,346,794 SPM cycles vs 5,101,703 cache cycles (`+4.8%`), with 32 2D DMA
-transfers, 524,288 DMA bytes, 57,169 DMA wait-stall cycles, and zero SPM bank
-conflicts.  This improves over the earlier row-block tile/chunk variant
-(`+6.5%`, 512 transfers), but it does not beat cache or the CPU-direct Softmax
-row-resident schedule.  Current work stays in P2c row-block DMA tuning, not P3.
+via `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=row_block_dma`.  The first
+`ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` cut was correct but slower than cache
+(`+4.8%`) because 16 KiB transfers left too much exposed wait time.  A P2c
+granularity sweep found the current best point at `ROW_BLOCK=2` and
+`ROW_GROUP_BLOCKS=8`: two 8 KiB SPM input buffers, 64 2D DMA transfers,
+524,288 DMA bytes, 12,297 DMA wait-stall cycles, and 3,953,189 SPM cycles vs
+4,346,982 cache cycles (`-9.1%`).  This is now stronger than the CPU-direct
+Softmax row-resident result (`-6.9%`).  Current work remains in P2c/P3
+profitability refit, not Phase 4 graph/fusion.
 
 ## Document Inventory
 
@@ -113,11 +112,60 @@ row-resident schedule.  Current work stays in P2c row-block DMA tuning, not P3.
 | Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
 | Current | Active prototype | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
 | Current | Active gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3 | Conservative profitability evidence landed: accepts existing fused matmul evidence, rejects streaming reductions and small row-resident reductions, and can accept large fill-on-first-pass row-resident evidence while default LayerNorm remains cache path. |
-| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P2c is active: true Softmax row-block A/B DMA is buildable and correct, but still slower than cache (`+4.8%`), so the next step is row-block DMA granularity/overlap tuning before any D3/P3 profitability refit. |
+| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P2c is active: true Softmax row-block A/B DMA is buildable, correct, and now profitable at `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` (`-9.1%`). Next step: fold this evidence into D3/P3 profitability rules while keeping reductions default-off until policy thresholds are refit. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Move to executable attention/fusion and producer-consumer promotion after Phase 3.5 reduction closure. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |
+
+## Running Current Experiments
+
+Run the workload driver from `workloads/`.  The useful modes are:
+
+```bash
+cd workloads
+python3 scripts/run_experiment.py <kernel> --mode verify --preset <preset>
+python3 scripts/run_experiment.py <kernel> --mode compare --preset <preset>
+```
+
+`verify` is build-only and checks generated artifacts such as LLIR SPM markers,
+DMA/fence markers, tier JSON, and promotion sidecars.  `compare` builds and runs
+both SPM and cache paths under gem5, then writes `compare.csv`,
+`spm_stats.csv`, and `artifacts.csv` under `m5out/<kernel>/<tag>/`.
+
+Each kernel's `experiment.toml` has a base `[params]` block plus named
+`[presets.<name>]` blocks.  `--preset <name>` starts from `[params]`, overlays
+that preset's shape/iteration values, then exports them through the kernel's
+`env_prefix` and `[build].c_macros`.  If `[preset_env.<name>]` exists, those
+environment variables are also exported for that preset.  CLI flags override
+last: use `--set KEY=VALUE` for manifest params and `--env KEY=VALUE` for
+compiler/runtime environment variables.  Unless `--tag` is provided, output tags
+come from `[kernel].tag_template` and are prefixed with the preset name.
+
+Current Phase 3.5 P2c commands:
+
+```bash
+cd workloads
+python3 scripts/run_experiment.py softmax --mode verify --preset phase35-row-block-dma-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row block' --expect-residency-plan 'Softmax x row block'
+python3 scripts/run_experiment.py softmax --mode compare --preset phase35-row-block-dma-large-row
+```
+
+To continue the row-block DMA granularity/overlap sweep, keep the preset env and
+override only the row-block knobs:
+
+```bash
+cd workloads
+python3 scripts/run_experiment.py softmax --mode compare --preset phase35-row-block-dma-large-row --set ROW_BLOCK=4 --set ROW_GROUP_BLOCKS=8 --tag p2c-rb4-rg8
+```
+
+The scripted Phase 3.5 suites are:
+
+```bash
+cd workloads
+./scripts/phase35_baseline.sh verify
+./scripts/phase35_baseline.sh smoke
+./scripts/phase35_baseline.sh full
+```
 
 ## Directory Rules
 

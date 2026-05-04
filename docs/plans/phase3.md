@@ -102,15 +102,16 @@ automatically:
   evidence against this one-row schedule, while leaving true row-block DMA as a
   later scheduling problem.
 - Phase 3.5 P2c implements that true Softmax row-block scheduling problem as an
-  opt-in prototype.  `ROW_BLOCK=4` and `ROW_GROUP_BLOCKS=2` expose an outer
-  row-block loop; `row_block_dma` lowers it to two 16 KiB SPM row-block input
-  buffers with A/B DMA prefetch across row blocks.  The path verifies and
-  passes gem5 correctness.  The flushed ROI compare measures 5,346,794 SPM
-  cycles vs 5,101,703 cache cycles (`+4.8%`), with 32 2D DMA transfers,
-  524,288 DMA bytes, 57,169 wait-stall cycles, and zero bank conflicts.
-  This improves descriptor count versus chunk-DMA but still loses because the
-  coarse DMA latency is not hidden.  Do not advance this thread to P3 default
-  promotion yet.
+  opt-in prototype.  The initial `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` version
+  verified but lost to cache (`+4.8%`) because 16 KiB DMA latency was exposed.
+  A P2c granularity sweep found a better point at `ROW_BLOCK=2`,
+  `ROW_GROUP_BLOCKS=8`: two 8 KiB SPM row-block input buffers with A/B DMA
+  prefetch across row blocks.  The flushed ROI compare measures 3,953,189 SPM
+  cycles vs 4,346,982 cache cycles (`-9.1%`), with 64 2D DMA transfers,
+  524,288 DMA bytes, 12,297 wait-stall cycles, and zero bank conflicts.  This
+  beats the CPU-direct Softmax row-resident schedule for the same 128x1024
+  shape, but default reduction promotion still waits for a D3/P3 profitability
+  refit.
 - Explicit promotion D3 has landed as a conservative opt-in profitability gate.
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the

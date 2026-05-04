@@ -607,14 +607,15 @@ lowering to Softmax: 128x1024 / BLOCK_N=64 measured 7,174,501 SPM cycles vs
 currently expressible DMA-prefetch row-resident variant as an opt-in path:
 Softmax remains positive but weaker (`-4.0%`), while LayerNorm regresses badly
 because descriptors and waits are paid per chunk.  P2c then implemented true
-Softmax row-block A/B DMA (`ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2`) with two 16 KiB
-SPM buffers; it verifies and reduces descriptor count to 32, but still measures
-5,346,794 SPM cycles vs 5,101,703 cache cycles (`+4.8%`) because the coarse DMA
-latency is exposed.  D3 therefore remains a conservative evidence gate, not a
-final reduction-performance closure: it accepts fused matmul evidence, rejects
+Softmax row-block A/B DMA.  The first `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` cut
+verified but lost (`+4.8%`) because 16 KiB DMA latency was exposed; tuning to
+`ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` now measures 3,953,189 SPM cycles vs
+4,346,982 cache cycles (`-9.1%`) with 64 2D DMA transfers and 12,297 wait-stall
+cycles.  D3 therefore remains a conservative evidence gate, not a final
+reduction-performance closure: it accepts fused matmul evidence, rejects
 streaming reductions and small row-resident reductions, can accept large
-fill-on-first-pass LayerNorm as opt-in evidence, and should wait for further P2c
-row-block DMA tuning before a profitability refit. See
+fill-on-first-pass LayerNorm as opt-in evidence, and now needs a P3
+profitability refit for the accepted Softmax row-block DMA case. See
 `spm-explicit-promotion.md` and `phase3.5-single-kernel-convergence.md`.
 
 First targets:
@@ -627,8 +628,9 @@ First targets:
   LayerNorm is done as opt-in evidence only; Softmax large-row now has a
   measured CPU-direct SPM win.  The measured DMA-prefetch variant is evidence
   against chunk-DMA for the current one-row schedule.  The true row-block DMA
-  prototype is now buildable and correct, but still slower than cache, so Phase
-  3.5 should keep tuning P2c before the D3 profitability refit.
+  prototype is now buildable, correct, and profitable for the tuned Softmax
+  large-row shape, so Phase 3.5 should move that evidence into the D3
+  profitability refit before changing defaults.
 - Keep reduction SPM default-off unless the promotion path beats cache on the
   existing 32x64 and 512x1024 comparisons.  LayerNorm fill-on-first-pass is
   near parity but not yet a clear default; Softmax large-row is promising.

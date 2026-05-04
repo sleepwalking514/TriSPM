@@ -145,10 +145,9 @@ Only after D1 validation:
 
 ### D2. Keep Row-Resident Reduction Separate From Streaming Reduction
 
-D2 status (2026-05-03): **active opt-in prototype; LayerNorm remains
-conservative, Softmax large-row has a measured CPU-direct SPM win,
-chunk-DMA prefetch is measured but not preferred, and true Softmax row-block
-A/B DMA is correct but still not profitable**.
+D2 status (2026-05-04): **active opt-in prototype; LayerNorm remains
+conservative, Softmax large-row has measured CPU-direct and true row-block DMA
+SPM wins, and chunk-DMA prefetch is measured but not preferred**.
 
 First step:
 
@@ -198,8 +197,8 @@ Implemented in D2:
   This is not the future multi-row row-block double buffer; the current kernel
   schedule still pays descriptor/wait overhead per chunk.
 - P2c adds `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=row_block_dma` for Softmax
-  row-block groups.  The preset exposes `ROW_BLOCK=4` and
-  `ROW_GROUP_BLOCKS=2`; the lowering allocates two full row-block SPM buffers
+  row-block groups.  The preset now exposes `ROW_BLOCK=2` and
+  `ROW_GROUP_BLOCKS=8`; the lowering allocates two full row-block SPM buffers
   and DMA-prefetches the next row block while max/sum/normalize consume the
   current row block.
 - `TRITON_ENABLE_SPM_REDUCTIONS=1` still exercises the older streaming
@@ -265,11 +264,12 @@ D2 validation results:
   fill-on-first-pass.  LayerNorm is much worse: 32x64 measured 30,538 vs 5,618
   cycles (`+443.6%`), and 512x1024 measured 7,178,094 vs 1,010,763 cycles
   (`+610.2%`) with 65,536 DMA transfers on the large case.
-- P2c true row-block DMA measurements show descriptor amortization but not a
-  win yet.  Softmax `phase35-row-block-dma-large-row` measured 5,346,794 SPM
-  vs 5,101,703 cache cycles (`+4.8%`) with 32 2D DMA transfers, 524,288 DMA
-  bytes, 57,169 wait-stall cycles, and zero SPM bank conflicts.  The descriptor
-  count is fixed relative to chunk-DMA, but 16 KiB DMA latency is not hidden.
+- P2c true row-block DMA measurements now show a profitable granularity.  The
+  first `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` cut measured 5,346,794 SPM vs
+  5,101,703 cache cycles (`+4.8%`) with 32 2D DMA transfers and 57,169
+  wait-stall cycles.  After tuning, `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` measured
+  3,953,189 SPM vs 4,346,982 cache cycles (`-9.1%`) with 64 2D DMA transfers,
+  524,288 DMA bytes, 12,297 wait-stall cycles, and zero SPM bank conflicts.
 
 D2 conclusion:
 
@@ -281,10 +281,9 @@ D2 conclusion:
   win, but Softmax large-row is now a live measured CPU-direct SPM win
   candidate.
 - P2b/P2c show that merely switching the row-resident producer to DMA is not
-  enough.  The true row-block design now has the needed multi-row lifetime and
-  descriptor amortization, but it still needs better overlap or a smaller
-  row-block DMA granularity before it can compete with cache or CPU-direct
-  fill-on-first-pass.
+  enough.  The useful DMA schedule needs multi-row lifetime plus a row-block
+  granularity that keeps latency hideable; for Softmax 128x1024, 8 KiB row
+  blocks now beat both cache and CPU-direct fill-on-first-pass.
 - D3 should keep the D1/D2 sidecar as evidence only, not as a planner or
   scheduling interface.
 
@@ -637,9 +636,10 @@ profitable.
 As of the P2c re-audit, Gate A is structurally useful but not closed as a
 default reduction-performance policy.  Reductions remain cache path by default:
 Softmax large-row has a measured CPU-direct row-resident SPM win, chunk-DMA
-prefetch is weaker and harmful for LayerNorm, and true Softmax row-block DMA is
-correct but still slower than cache because its coarse DMA latency is exposed.
-Keep tuning P2c before D3 is refit for automatic promotion.
+prefetch is weaker and harmful for LayerNorm, and true Softmax row-block DMA now
+wins at `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8`.  Refit D3 before automatic
+promotion so the default policy can explain both this accepted Softmax case and
+the still-rejected LayerNorm/small-row cases.
 
 Phase 3.5 owns that next task.  See
 `phase3.5-single-kernel-convergence.md` for the concrete pass/code plan:

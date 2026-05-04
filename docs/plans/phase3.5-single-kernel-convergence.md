@@ -287,22 +287,22 @@ Conclusion:
   requires a different kernel schedule or pass structure that processes multiple
   rows per program/block and amortizes one coarse DMA phase over many rows.
 
-### 2026-05-03 P2c Softmax Row-Block A/B DMA Prototype
+### 2026-05-03/04 P2c Softmax Row-Block A/B DMA Prototype
 
 Landed:
 
 - Softmax now has explicit row-block controls: `ROW_BLOCK` and
   `ROW_GROUP_BLOCKS`.  The default remains the original one-row path; the
-  `phase35-row-block-dma-large-row` preset uses `ROW_BLOCK=4` and
-  `ROW_GROUP_BLOCKS=2` so one program exposes an outer row-block loop.
+  `phase35-row-block-dma-large-row` preset now uses `ROW_BLOCK=2` and
+  `ROW_GROUP_BLOCKS=8` so one program exposes a longer outer row-block loop.
 - `row_block_dma` now matches that outer loop for Softmax.  The lowering
   allocates two resident row-block input buffers, emits a prologue DMA for the
   first row block, waits for the current buffer at the top of each outer-loop
   iteration, prefetches the next row block into the alternate SPM slot, then
   runs max, exp/sum, and normalize/store from the current SPM slot.
-- The row-block DMA shape is a coarse full-row-block copy: 1024 columns x 4
-  rows x fp32 = 16 KiB per row block.  The SPM view uses full-row strides, so
-  the compute loops read the same layout that the 2D DMA writes.
+- The current row-block DMA shape is a full-row-block copy: 1024 columns x 2
+  rows x fp32 = 8 KiB per row block.  The SPM view uses full-row strides, so the
+  compute loops read the same layout that the 2D DMA writes.
 - Promotion evidence records `source = "Softmax x row block"`, scope
   `program-row-block-group`, `buffer_role = resident_row_block`,
   `rotation_policy = double_buffer`, and `required_spm_slots = 2`.
@@ -322,22 +322,28 @@ Measured findings:
 
 | Kernel preset | Schedule | Result |
 |---|---|---|
-| `softmax phase35-row-block-dma-large-row` | true row-block A/B DMA, 16 KiB row-block buffers | 5,346,794 SPM vs 5,101,703 cache cycles (`+4.8%`); 32 2D DMA transfers, 524,288 DMA bytes, 57,169 wait-stall cycles, 0 SPM bank conflicts |
+| `softmax phase35-row-block-dma-large-row` old `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` | true row-block A/B DMA, 16 KiB row-block buffers | 5,346,794 SPM vs 5,101,703 cache cycles (`+4.8%`); 32 2D DMA transfers, 524,288 DMA bytes, 57,169 wait-stall cycles, 0 SPM bank conflicts |
+| `softmax p2c-rb4-rg4` | same 16 KiB buffers, longer row-block group | 5,075,308 SPM vs 5,107,055 cache cycles (`-0.6%`); wait-stall cycles fall to 28,091 |
+| `softmax p2c-rb4-rg8` | same 16 KiB buffers, still longer row-block group | 5,061,998 SPM vs 5,104,950 cache cycles (`-0.8%`); wait-stall cycles fall to 14,498 |
+| `softmax p2c-rb2-rg4` | 8 KiB row-block buffers | 3,966,595 SPM vs 4,350,227 cache cycles (`-8.8%`); 64 2D DMA transfers, avg DMA latency 1,700.7 cycles, 25,059 wait-stall cycles |
+| `softmax phase35-row-block-dma-large-row` updated preset | 8 KiB row-block buffers, longer row-block group | 3,953,189 SPM vs 4,346,982 cache cycles (`-9.1%`); 64 2D DMA transfers, 524,288 DMA bytes, 12,297 wait-stall cycles, 0 SPM bank conflicts |
+| `softmax p2c-rb8-rg4` | 32 KiB row-block buffers | 7,793,190 SPM vs 7,670,844 cache cycles (`+1.6%`); 16 2D DMA transfers, avg DMA latency 6,920.3 cycles, 28,338 wait-stall cycles |
 
 Interpretation:
 
 - This is the first true row-block DMA prototype in the Softmax path.  It is no
   longer the P2b per-chunk DMA schedule: descriptor count drops from 2,048 in
-  one-row DMA-prefetch, and from 512 in the earlier row-block tile/chunk probe,
-  to 32 full-row-block DMA transfers.
-- The result is correct but still not profitable.  The larger 16 KiB DMA
-  transfers have high latency (`avgLatency` about 3,312 cycles), and the exposed
-  wait stalls rise to 57,169 cycles.  Descriptor pressure is mostly fixed; DMA
-  latency overlap is not.
-- CPU-direct Softmax row residency remains the best measured SPM schedule for
-  this shape (`-6.9%` vs cache).  P2c should therefore keep tuning row-block DMA
-  granularity and overlap rather than moving directly to P3 default-promotion
-  policy.
+  one-row DMA-prefetch to 64 full-row-block DMA transfers at the current 8 KiB
+  granularity.
+- The `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` result was correct but not
+  profitable.  Increasing `ROW_GROUP_BLOCKS` reduced exposed prologue/wait cost,
+  while reducing the row-block from 16 KiB to 8 KiB cut average DMA latency from
+  about 3.3K cycles to about 1.7K cycles.  Going coarser to 32 KiB regresses
+  again.
+- `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` is the current best measured SPM schedule
+  for this Softmax shape (`-9.1%` vs cache), ahead of CPU-direct row residency
+  (`-6.9%`).  P2c should now feed D3/P3 profitability refit rather than changing
+  default reduction promotion immediately.
 
 ## Work Items
 
@@ -438,9 +444,10 @@ Tasks:
 - Do not make streaming DMA reduction default unless it beats the resident
   plan; it is now a fallback/debug path.
 
-P2b/P2c result: chunk-DMA was measured and rejected as too descriptor-heavy;
-true Softmax row-block A/B DMA now builds, verifies, and runs, but still loses
-to cache because the coarse 16 KiB DMA latency is not hidden.
+P2b/P2c result: chunk-DMA was measured and rejected as too descriptor-heavy.
+True Softmax row-block A/B DMA now builds, verifies, and wins after P2c
+granularity tuning: the old 16 KiB row-block cut exposed too much wait, while
+the current 8 KiB row-block cut with a longer row-block group beats cache.
 
 This is a different idea from the old streaming reduction DMA path.  The old
 path DMAed tiny per-loop chunks and paid descriptor/MMIO/wait overhead for each
@@ -489,9 +496,10 @@ Exit criteria:
 - Row-block DMA double buffering has a buildable prototype or a documented
   rejection with measured descriptor/wait overhead and SPM-capacity math.
   P2b built and measured the chunk-DMA prefetch variant; P2c now builds and
-  measures the true Softmax row-block A/B DMA variant.  The descriptor count is
-  down to 32, but the schedule still regresses (`+4.8%`) because full-row-block
-  DMA wait latency is not hidden.
+  measures the true Softmax row-block A/B DMA variant.  The current best
+  `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` schedule uses 64 2D DMA transfers and
+  wins (`-9.1%`) because 8 KiB transfers keep latency hideable enough for the
+  row-block compute group.
 
 ### P3. Profitability Gate Refit
 
