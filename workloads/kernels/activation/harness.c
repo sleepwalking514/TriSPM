@@ -35,6 +35,8 @@
 
 #define GRID_X  ((SIZE + BLOCK_SIZE - 1) / BLOCK_SIZE)
 
+static volatile int activation_check_result = 1;
+
 static float silu_ref(float x)
 {
     return x / (1.0f + expf(-x));
@@ -42,24 +44,20 @@ static float silu_ref(float x)
 
 int main(void)
 {
+    activation_check_result = ACTIVATION_CHECK_RESULT;
+
     printf("activation(silu): SIZE=%d  BLOCK_SIZE=%d  GRID_X=%d  warmup=%d  measure=%d  flush=%d  check=%d\n",
            SIZE, BLOCK_SIZE, GRID_X, ACTIVATION_WARMUP_ITERS,
            ACTIVATION_MEASURE_ITERS, ACTIVATION_FLUSH_BEFORE_ROI,
-           ACTIVATION_CHECK_RESULT);
+           activation_check_result);
 
     size_t bytes = (size_t)SIZE * sizeof(float);
     float *x_shadow = (float *)malloc(bytes);
     float *x = (float *)activation_alloc(0, bytes);
     float *out = (float *)activation_alloc(1, bytes);
-#if ACTIVATION_CHECK_RESULT
-    float *ref = (float *)malloc(bytes);
-#endif
+    float *ref = NULL;
 
-    if (!x_shadow || !x || !out
-#if ACTIVATION_CHECK_RESULT
-        || !ref
-#endif
-    ) {
+    if (!x_shadow || !x || !out) {
         fprintf(stderr, "malloc failed\n");
         return 1;
     }
@@ -67,14 +65,10 @@ int main(void)
     for (int i = 0; i < SIZE; i++) {
         float v = (float)((i % 37) - 18) / 6.0f;
         x_shadow[i] = v;
-#if ACTIVATION_CHECK_RESULT
-        ref[i] = silu_ref(v);
-#endif
     }
 
     flush_caches();
     publish_input(x, x_shadow, bytes);
-    free(x_shadow);
     memset(out, 0, bytes);
 
     if (ACTIVATION_FLUSH_BEFORE_ROI)
@@ -90,32 +84,40 @@ int main(void)
 
     m5_dump_stats(0, 0);
 
-#if ACTIVATION_CHECK_RESULT
     int errors = 0;
-    for (int i = 0; i < SIZE; i++) {
-        if (fabsf(out[i] - ref[i]) > 1e-3f) {
-            if (errors < 10)
-                printf("MISMATCH [%d]: got %.6f, expected %.6f\n",
-                       i, out[i], ref[i]);
-            errors++;
+    if (activation_check_result) {
+        ref = (float *)malloc(bytes);
+        if (!ref) {
+            fprintf(stderr, "malloc failed\n");
+            free(x_shadow);
+            activation_free_all();
+            return 1;
         }
+
+        for (int i = 0; i < SIZE; i++)
+            ref[i] = silu_ref(x_shadow[i]);
+
+        for (int i = 0; i < SIZE; i++) {
+            if (fabsf(out[i] - ref[i]) > 1e-3f) {
+                if (errors < 10)
+                    printf("MISMATCH [%d]: got %.6f, expected %.6f\n",
+                           i, out[i], ref[i]);
+                errors++;
+            }
+        }
+
+        if (errors == 0)
+            printf("PASS: all %d elements correct\n", SIZE);
+        else
+            printf("FAIL: %d / %d mismatches\n", errors, SIZE);
+
+        free(ref);
+    } else {
+        printf("SKIP: result check disabled\n");
     }
 
-    if (errors == 0)
-        printf("PASS: all %d elements correct\n", SIZE);
-    else
-        printf("FAIL: %d / %d mismatches\n", errors, SIZE);
-
-    free(ref);
-#else
-    printf("SKIP: result check disabled\n");
-#endif
-
+    free(x_shadow);
     activation_free_all();
 
-#if ACTIVATION_CHECK_RESULT
     return (errors > 0) ? 1 : 0;
-#else
-    return 0;
-#endif
 }

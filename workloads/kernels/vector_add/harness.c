@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "vector_add_launcher.h"
+#include "libspm.h"
 
 /*
  * Test harness for the Triton-compiled vector_add kernel.
@@ -28,10 +29,14 @@
 
 #define GRID_X  ((SIZE + BLOCK_SIZE - 1) / BLOCK_SIZE)
 
+static volatile int vector_add_check_result = 1;
+
 int main(void)
 {
+    vector_add_check_result = CHECK_RESULT;
+
     printf("vector_add: SIZE=%d  BLOCK_SIZE=%d  GRID_X=%d  check=%d\n",
-           SIZE, BLOCK_SIZE, GRID_X, CHECK_RESULT);
+           SIZE, BLOCK_SIZE, GRID_X, vector_add_check_result);
 
     float *x   = (float *)vector_add_alloc(0, SIZE * sizeof(float));
     float *y   = (float *)vector_add_alloc(1, SIZE * sizeof(float));
@@ -48,35 +53,35 @@ int main(void)
         out[i] = 0.0f;
     }
 
+    flush_caches();
+
     /* Launch kernel over the 1-D grid via the generated launcher. */
+    m5_reset_stats(0, 0);
     vector_add_launch(GRID_X, 1, 1, x, y, out);
+    m5_dump_stats(0, 0);
 
-#if CHECK_RESULT
-    /* Verify */
     int errors = 0;
-    for (int i = 0; i < SIZE; i++) {
-        float expected = x[i] + y[i];
-        if (fabsf(out[i] - expected) > 1e-5f) {
-            if (errors < 10)
-                printf("MISMATCH [%d]: got %.4f, expected %.4f\n",
-                       i, out[i], expected);
-            errors++;
+    if (vector_add_check_result) {
+        /* Verify */
+        for (int i = 0; i < SIZE; i++) {
+            float expected = x[i] + y[i];
+            if (fabsf(out[i] - expected) > 1e-5f) {
+                if (errors < 10)
+                    printf("MISMATCH [%d]: got %.4f, expected %.4f\n",
+                           i, out[i], expected);
+                errors++;
+            }
         }
-    }
 
-    if (errors == 0)
-        printf("PASS: all %d elements correct\n", SIZE);
-    else
-        printf("FAIL: %d / %d mismatches\n", errors, SIZE);
-#else
-    printf("SKIP: result check disabled\n");
-#endif
+        if (errors == 0)
+            printf("PASS: all %d elements correct\n", SIZE);
+        else
+            printf("FAIL: %d / %d mismatches\n", errors, SIZE);
+    } else {
+        printf("SKIP: result check disabled\n");
+    }
 
     vector_add_free_all();
 
-#if CHECK_RESULT
     return (errors > 0) ? 1 : 0;
-#else
-    return 0;
-#endif
 }

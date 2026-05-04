@@ -45,11 +45,15 @@
 #define MATMUL_CHECK_RESULT 1
 #endif
 
+static volatile int matmul_check_result = 1;
+
 int main(void)
 {
+    matmul_check_result = MATMUL_CHECK_RESULT;
+
     printf("matmul: M=%d  N=%d  K=%d  GRID_X=%d  warmup=%d  measure=%d  flush=%d  check=%d\n",
            M, N, K, GRID_X, MATMUL_WARMUP_ITERS, MATMUL_MEASURE_ITERS,
-           MATMUL_FLUSH_BEFORE_ROI, MATMUL_CHECK_RESULT);
+           MATMUL_FLUSH_BEFORE_ROI, matmul_check_result);
 
     /* Cacheable shadows for inputs.  In SPM mode the launcher places A/B
      * in the uncacheable DMA buffer; doing the host-side init and the
@@ -66,15 +70,9 @@ int main(void)
     float *a   = (float *)matmul_alloc(0, a_bytes);
     float *b   = (float *)matmul_alloc(1, b_bytes);
     float *c   = (float *)matmul_alloc(2, c_bytes);
-#if MATMUL_CHECK_RESULT
-    float *ref = (float *)malloc(c_bytes);
-#endif
+    float *ref = NULL;
 
-    if (!a_shadow || !b_shadow || !a || !b || !c
-#if MATMUL_CHECK_RESULT
-        || !ref
-#endif
-    ) {
+    if (!a_shadow || !b_shadow || !a || !b || !c) {
         fprintf(stderr, "malloc failed\n");
         return 1;
     }
@@ -84,17 +82,6 @@ int main(void)
         a_shadow[i] = (float)((i % 17) - 8) * 0.1f;
     for (int i = 0; i < K * N; i++)
         b_shadow[i] = (float)((i % 13) - 6) * 0.1f;
-
-#if MATMUL_CHECK_RESULT
-    /* Reference matmul on cacheable shadows. */
-    for (int i = 0; i < M; i++)
-        for (int j = 0; j < N; j++) {
-            float sum = 0.0f;
-            for (int kk = 0; kk < K; kk++)
-                sum += a_shadow[i * K + kk] * b_shadow[kk * N + j];
-            ref[i * N + j] = sum;
-        }
-#endif
 
     /* Force shadow dirty lines back to DRAM so the DMA engine
      * reading a_shadow/b_shadow on the next step sees the data the
@@ -108,8 +95,6 @@ int main(void)
      * memcpy in cache-baseline mode). */
     publish_input(a, a_shadow, a_bytes);
     publish_input(b, b_shadow, b_bytes);
-    free(a_shadow);
-    free(b_shadow);
 
     /* Zero output (cacheable in both modes). */
     memset(c, 0, c_bytes);
@@ -132,36 +117,52 @@ int main(void)
 
     m5_dump_stats(0, 0);
 
-#if MATMUL_CHECK_RESULT
-    /* Verify — print per-tile summary to locate which tiles fail. */
     int errors = 0;
-    for (int i = 0; i < M * N; i++) {
-        if (fabsf(c[i] - ref[i]) > 1e-3f) {
-            if (errors < 20) {
-                int row = i / N, col = i % N;
-                int tm = row / BLOCK_SIZE_M, tn = col / BLOCK_SIZE_N;
-                printf("MISMATCH [%d] (r=%d,c=%d tile_m=%d,tile_n=%d): "
-                       "got %.6f, expected %.6f\n",
-                       i, row, col, tm, tn, c[i], ref[i]);
-            }
-            errors++;
+    if (matmul_check_result) {
+        ref = (float *)malloc(c_bytes);
+        if (!ref) {
+            fprintf(stderr, "malloc failed\n");
+            free(a_shadow);
+            free(b_shadow);
+            matmul_free_all();
+            return 1;
         }
+
+        /* Reference matmul on cacheable shadows after the measured ROI. */
+        for (int i = 0; i < M; i++)
+            for (int j = 0; j < N; j++) {
+                float sum = 0.0f;
+                for (int kk = 0; kk < K; kk++)
+                    sum += a_shadow[i * K + kk] * b_shadow[kk * N + j];
+                ref[i * N + j] = sum;
+            }
+
+        /* Verify — print per-tile summary to locate which tiles fail. */
+        for (int i = 0; i < M * N; i++) {
+            if (fabsf(c[i] - ref[i]) > 1e-3f) {
+                if (errors < 20) {
+                    int row = i / N, col = i % N;
+                    int tm = row / BLOCK_SIZE_M, tn = col / BLOCK_SIZE_N;
+                    printf("MISMATCH [%d] (r=%d,c=%d tile_m=%d,tile_n=%d): "
+                           "got %.6f, expected %.6f\n",
+                           i, row, col, tm, tn, c[i], ref[i]);
+                }
+                errors++;
+            }
+        }
+
+        if (errors == 0)
+            printf("\nPASS: all %d elements correct\n", M * N);
+        else
+            printf("\nFAIL: %d / %d mismatches\n", errors, M * N);
+
+        free(ref);
+    } else {
+        printf("\nSKIP: result check disabled\n");
     }
-
-    if (errors == 0)
-        printf("\nPASS: all %d elements correct\n", M * N);
-    else
-        printf("\nFAIL: %d / %d mismatches\n", errors, M * N);
-
-    free(ref);
-#else
-    printf("\nSKIP: result check disabled\n");
-#endif
+    free(a_shadow);
+    free(b_shadow);
     matmul_free_all();
 
-#if MATMUL_CHECK_RESULT
     return (errors > 0) ? 1 : 0;
-#else
-    return 0;
-#endif
 }

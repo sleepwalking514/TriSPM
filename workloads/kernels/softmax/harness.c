@@ -43,6 +43,8 @@
 #define SOFTMAX_CHECK_RESULT 1
 #endif
 
+static volatile int softmax_check_result = 1;
+
 #if (N % BLOCK_N) != 0
 #error "softmax workload requires N to be divisible by BLOCK_N"
 #endif
@@ -55,24 +57,20 @@
 
 int main(void)
 {
+    softmax_check_result = SOFTMAX_CHECK_RESULT;
+
     printf("softmax: M=%d  N=%d  BLOCK_N=%d  ROW_BLOCK=%d  ROW_GROUP_BLOCKS=%d  warmup=%d  measure=%d  flush=%d  check=%d\n",
            M, N, BLOCK_N, ROW_BLOCK, ROW_GROUP_BLOCKS,
            SOFTMAX_WARMUP_ITERS, SOFTMAX_MEASURE_ITERS, SOFTMAX_FLUSH_BEFORE_ROI,
-           SOFTMAX_CHECK_RESULT);
+           softmax_check_result);
 
     size_t bytes = (size_t)M * N * sizeof(float);
     float *x_shadow = (float *)malloc(bytes);
     float *x = (float *)softmax_alloc(0, bytes);
     float *out = (float *)softmax_alloc(1, bytes);
-#if SOFTMAX_CHECK_RESULT
-    float *ref = (float *)malloc(bytes);
-#endif
+    float *ref = NULL;
 
-    if (!x_shadow || !x || !out
-#if SOFTMAX_CHECK_RESULT
-        || !ref
-#endif
-    ) {
+    if (!x_shadow || !x || !out) {
         fprintf(stderr, "malloc failed\n");
         return 1;
     }
@@ -84,29 +82,8 @@ int main(void)
         }
     }
 
-#if SOFTMAX_CHECK_RESULT
-    for (int i = 0; i < M; i++) {
-        float max_v = x_shadow[i * N];
-        for (int j = 1; j < N; j++) {
-            float v = x_shadow[i * N + j];
-            if (v > max_v)
-                max_v = v;
-        }
-
-        float denom = 0.0f;
-        for (int j = 0; j < N; j++) {
-            float e = expf(x_shadow[i * N + j] - max_v);
-            ref[i * N + j] = e;
-            denom += e;
-        }
-        for (int j = 0; j < N; j++)
-            ref[i * N + j] /= denom;
-    }
-#endif
-
     flush_caches();
     publish_input(x, x_shadow, bytes);
-    free(x_shadow);
     memset(out, 0, bytes);
 
     if (SOFTMAX_FLUSH_BEFORE_ROI)
@@ -122,34 +99,57 @@ int main(void)
 
     m5_dump_stats(0, 0);
 
-#if SOFTMAX_CHECK_RESULT
     int errors = 0;
-    for (int i = 0; i < M * N; i++) {
-        if (fabsf(out[i] - ref[i]) > 1e-3f) {
-            if (errors < 10) {
-                int row = i / N, col = i % N;
-                printf("MISMATCH [%d,%d]: got %.6f, expected %.6f\n",
-                       row, col, out[i], ref[i]);
-            }
-            errors++;
+    if (softmax_check_result) {
+        ref = (float *)malloc(bytes);
+        if (!ref) {
+            fprintf(stderr, "malloc failed\n");
+            free(x_shadow);
+            softmax_free_all();
+            return 1;
         }
+
+        for (int i = 0; i < M; i++) {
+            float max_v = x_shadow[i * N];
+            for (int j = 1; j < N; j++) {
+                float v = x_shadow[i * N + j];
+                if (v > max_v)
+                    max_v = v;
+            }
+
+            float denom = 0.0f;
+            for (int j = 0; j < N; j++) {
+                float e = expf(x_shadow[i * N + j] - max_v);
+                ref[i * N + j] = e;
+                denom += e;
+            }
+            for (int j = 0; j < N; j++)
+                ref[i * N + j] /= denom;
+        }
+
+        for (int i = 0; i < M * N; i++) {
+            if (fabsf(out[i] - ref[i]) > 1e-3f) {
+                if (errors < 10) {
+                    int row = i / N, col = i % N;
+                    printf("MISMATCH [%d,%d]: got %.6f, expected %.6f\n",
+                           row, col, out[i], ref[i]);
+                }
+                errors++;
+            }
+        }
+
+        if (errors == 0)
+            printf("PASS: all %d elements correct\n", M * N);
+        else
+            printf("FAIL: %d / %d mismatches\n", errors, M * N);
+
+        free(ref);
+    } else {
+        printf("SKIP: result check disabled\n");
     }
 
-    if (errors == 0)
-        printf("PASS: all %d elements correct\n", M * N);
-    else
-        printf("FAIL: %d / %d mismatches\n", errors, M * N);
-
-    free(ref);
-#else
-    printf("SKIP: result check disabled\n");
-#endif
-
+    free(x_shadow);
     softmax_free_all();
 
-#if SOFTMAX_CHECK_RESULT
     return (errors > 0) ? 1 : 0;
-#else
-    return 0;
-#endif
 }

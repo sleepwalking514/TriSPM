@@ -27,10 +27,14 @@
 #define LAYERNORM_FLUSH_BEFORE_ROI 1
 #endif
 
+static volatile int layer_norm_check_result = 1;
+
 int main(void)
 {
+    layer_norm_check_result = CHECK_RESULT;
+
     printf("layer_norm: M=%d  N=%d  flush=%d  check=%d\n",
-           M, N, LAYERNORM_FLUSH_BEFORE_ROI, CHECK_RESULT);
+           M, N, LAYERNORM_FLUSH_BEFORE_ROI, layer_norm_check_result);
 
     size_t x_bytes = (size_t)M * N * sizeof(float);
     size_t param_bytes = (size_t)N * sizeof(float);
@@ -42,15 +46,9 @@ int main(void)
     float *gamma = (float *)layer_norm_alloc(1, param_bytes);
     float *beta  = (float *)layer_norm_alloc(2, param_bytes);
     float *out   = (float *)layer_norm_alloc(3, x_bytes);
-#if CHECK_RESULT
-    float *ref = (float *)malloc(x_bytes);
-#endif
+    float *ref = NULL;
 
-    if (!x_shadow || !gamma_shadow || !beta_shadow || !x || !gamma || !beta || !out
-#if CHECK_RESULT
-        || !ref
-#endif
-    ) {
+    if (!x_shadow || !gamma_shadow || !beta_shadow || !x || !gamma || !beta || !out) {
         fprintf(stderr, "malloc failed\n");
         return 1;
     }
@@ -65,38 +63,10 @@ int main(void)
         beta_shadow[j]  = (float)(j % 3) * 0.05f;         /* 0.0, 0.05, 0.10 */
     }
 
-#if CHECK_RESULT
-    /* Reference layer-norm on cacheable shadows. */
-    for (int i = 0; i < M; i++) {
-        float mean = 0.0f;
-        for (int j = 0; j < N; j++)
-            mean += x_shadow[i * N + j];
-        mean /= N;
-
-        float var = 0.0f;
-        for (int j = 0; j < N; j++) {
-            float d = x_shadow[i * N + j] - mean;
-            var += d * d;
-        }
-        var /= N;
-
-        float inv_std = 1.0f / sqrtf(var + 1e-5f);
-
-        for (int j = 0; j < N; j++) {
-            ref[i * N + j] =
-                (x_shadow[i * N + j] - mean) * inv_std
-                * gamma_shadow[j] + beta_shadow[j];
-        }
-    }
-#endif
-
     flush_caches();
     publish_input(x, x_shadow, x_bytes);
     publish_input(gamma, gamma_shadow, param_bytes);
     publish_input(beta, beta_shadow, param_bytes);
-    free(x_shadow);
-    free(gamma_shadow);
-    free(beta_shadow);
 
     memset(out, 0, x_bytes);
 
@@ -111,34 +81,66 @@ int main(void)
 
     m5_dump_stats(0, 0);
 
-#if CHECK_RESULT
     int errors = 0;
-    for (int i = 0; i < M * N; i++) {
-        if (fabsf(out[i] - ref[i]) > 1e-4f) {
-            if (errors < 10) {
-                int row = i / N, col = i % N;
-                printf("MISMATCH [%d,%d]: got %.6f, expected %.6f\n",
-                       row, col, out[i], ref[i]);
-            }
-            errors++;
+    if (layer_norm_check_result) {
+        ref = (float *)malloc(x_bytes);
+        if (!ref) {
+            fprintf(stderr, "malloc failed\n");
+            free(x_shadow);
+            free(gamma_shadow);
+            free(beta_shadow);
+            layer_norm_free_all();
+            return 1;
         }
+
+        /* Reference layer-norm on cacheable shadows after the measured ROI. */
+        for (int i = 0; i < M; i++) {
+            float mean = 0.0f;
+            for (int j = 0; j < N; j++)
+                mean += x_shadow[i * N + j];
+            mean /= N;
+
+            float var = 0.0f;
+            for (int j = 0; j < N; j++) {
+                float d = x_shadow[i * N + j] - mean;
+                var += d * d;
+            }
+            var /= N;
+
+            float inv_std = 1.0f / sqrtf(var + 1e-5f);
+
+            for (int j = 0; j < N; j++) {
+                ref[i * N + j] =
+                    (x_shadow[i * N + j] - mean) * inv_std
+                    * gamma_shadow[j] + beta_shadow[j];
+            }
+        }
+
+        for (int i = 0; i < M * N; i++) {
+            if (fabsf(out[i] - ref[i]) > 1e-4f) {
+                if (errors < 10) {
+                    int row = i / N, col = i % N;
+                    printf("MISMATCH [%d,%d]: got %.6f, expected %.6f\n",
+                           row, col, out[i], ref[i]);
+                }
+                errors++;
+            }
+        }
+
+        if (errors == 0)
+            printf("PASS: all %d elements correct\n", M * N);
+        else
+            printf("FAIL: %d / %d mismatches\n", errors, M * N);
+
+        free(ref);
+    } else {
+        printf("SKIP: result check disabled\n");
     }
 
-    if (errors == 0)
-        printf("PASS: all %d elements correct\n", M * N);
-    else
-        printf("FAIL: %d / %d mismatches\n", errors, M * N);
-
-    free(ref);
-#else
-    printf("SKIP: result check disabled\n");
-#endif
-
+    free(x_shadow);
+    free(gamma_shadow);
+    free(beta_shadow);
     layer_norm_free_all();
 
-#if CHECK_RESULT
     return (errors > 0) ? 1 : 0;
-#else
-    return 0;
-#endif
 }
