@@ -77,6 +77,9 @@ at 4,291,669 cycles.  Canonical SPM-direct is real (`addrspace(3)`, zero DMA)
 but loses to best-cache at 7,175,796 cycles (`+67.2%`).  Row-block A/B DMA is
 correct and near parity at 4,312,695 cycles (`+0.5%`) with 64 2D DMA transfers,
 524,288 DMA bytes, and zero SPM bank conflicts, but it is not yet a default win.
+An `rg16` diagnostic halves DMA wait stalls (12,528 -> 6,342 cycles) without
+improving total time, so the remaining bottleneck is SPM row-block load/issue
+pressure rather than exposed DMA wait.
 Standalone Softmax therefore remains cache path by default; row-block DMA stays
 opt-in evidence, and Softmax SPM should be revisited inside fused attention or
 after adjacent-shape sweeps show a stable best-cache win.

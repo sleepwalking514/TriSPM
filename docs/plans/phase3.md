@@ -109,8 +109,11 @@ automatically:
   row-block `rb2/rg8` at 4,291,669 cycles.  Canonical SPM-direct is real but
   loses to best-cache at 7,175,796 cycles (`+67.2%`); row-block A/B DMA is near
   parity at 4,312,695 cycles (`+0.5%`) with 64 2D DMA transfers and zero SPM
-  bank conflicts.  Standalone Softmax therefore remains default cache path;
-  row-block DMA stays opt-in evidence.
+  bank conflicts.  A follow-up `ROW_GROUP_BLOCKS=16` diagnostic cuts DMA wait
+  stalls roughly in half but leaves cycles flat, so the remaining bottleneck is
+  SPM row-block load/issue pressure rather than exposed DMA wait.  Standalone
+  Softmax therefore remains default cache path; row-block DMA stays opt-in
+  evidence.
 - Explicit promotion D3 has landed as a conservative opt-in profitability gate.
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the

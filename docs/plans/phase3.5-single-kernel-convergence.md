@@ -476,6 +476,7 @@ SPM candidates versus best-cache `row_block rb2/rg8`:
 |---|---:|---|
 | canonical SPM-direct fill-on-first-pass | 7,175,796 | `+67.2%` vs best-cache; faster than canonical cache but not policy-competitive |
 | row-block A/B DMA `rb2/rg8` | 4,312,695 | `+0.5%` vs best-cache; correct and near parity, but not a default win |
+| row-block A/B DMA `rb2/rg16` diagnostic | 4,313,160 | `+0.5%` vs best-cache; wait stalls fall to 6,342 cycles, but total time does not improve |
 
 Interpretation:
 
@@ -487,6 +488,14 @@ Interpretation:
   2D DMA transfers, moves 524,288 DMA bytes, has 12,528 wait-stall cycles, and
   has zero SPM bank conflicts in this run.  That is useful implementation
   evidence, not enough default-policy evidence.
+- A follow-up `ROW_GROUP_BLOCKS=16` diagnostic halves DMA wait stalls
+  (`12,528 -> 6,342`) but leaves total cycles flat
+  (`4,312,695 -> 4,313,160`).  A `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=8` CLI probe
+  is much worse at 5,522,771 cycles because the generated row-block IR/assembly
+  roughly doubles (`addrspace(3) = 1,536`, 11,191 asm lines).  The current
+  bottleneck is therefore not exposed DMA wait; it is the SPM row-block
+  load/issue path and code shape, visible as about `+40.6%` issued
+  `FloatMemRead` versus best-cache even when wait stalls are reduced.
 - Current policy: standalone Softmax stays cache path by default.  Keep
   row-block DMA as an opt-in schedule and revisit Softmax SPM inside fused
   attention or after a broader adjacent-shape sweep shows a stable win.
