@@ -3,11 +3,11 @@
 
 gem5 produces multiple stats blocks when m5_dump_stats() is called
 repeatedly.  This script extracts the relevant l2cache counters from
-each block and presents them as a table (or CSV with --csv).
+each block and presents them as a text table.
 
 Usage:
-    python3 parse_l2_warming.py <stats.txt> [--csv]
-    python3 parse_l2_warming.py <m5out_dir>  [--csv]
+    python3 parse_l2_warming.py <stats.txt>
+    python3 parse_l2_warming.py <m5out_dir>
 """
 
 import sys
@@ -79,23 +79,12 @@ def print_table(blocks: list[dict[str, str]]):
                 print("  → WARNING: L2-warming NOT observed. Check flush logic.")
 
 
-def print_csv(blocks: list[dict[str, str]]):
-    """Output CSV for downstream processing."""
-    short_names = [c.split(".")[-1] for c in COUNTERS]
-    print("phase," + ",".join(short_names))
-    for i, block in enumerate(blocks):
-        name = PHASE_NAMES[i] if i < len(PHASE_NAMES) else f"Phase_{i}"
-        vals = [block.get(c, "") for c in COUNTERS]
-        print(f"{name},{','.join(vals)}")
-
-
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
 
     path = Path(sys.argv[1])
-    csv_mode = "--csv" in sys.argv
 
     if path.is_dir():
         path = path / "stats.txt"
@@ -108,10 +97,7 @@ def main():
         print("ERROR: no stats blocks found", file=sys.stderr)
         sys.exit(1)
 
-    if csv_mode:
-        print_csv(blocks)
-    else:
-        print_table(blocks)
+    print_table(blocks)
 
 
 if __name__ == "__main__":

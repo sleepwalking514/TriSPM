@@ -3,16 +3,16 @@
 
 Layout:
   workloads/build/<kernel>/<spm|cache>-<flat-tag>/   build artifacts (.llir, .s, _test, _launcher.c)
-  workloads/m5out/<kernel>/<tag>/<spm|cache>/        gem5 outdir + stats.txt + roi-stats.txt + run.log
-  workloads/m5out/<kernel>/<tag>/compare.txt         SPM-vs-cache delta table
-  workloads/m5out/<kernel>/<tag>/compare.csv         CSV form of compare.txt
-  workloads/m5out/<kernel>/<tag>/spm_stats.txt       SPM-only signals (DMA, banks, ...)
-  workloads/m5out/<kernel>/<tag>/spm_stats.csv       CSV form of spm_stats.txt
-  workloads/m5out/<kernel>/<tag>/artifacts.csv       build artifact line/marker counts
+  workloads/m5out/<kernel>/<shape>/<spm|cache>/<blocking>/
+      gem5 outdir + stats.txt + roi-stats.txt + run.log
+  workloads/m5out/<kernel>/<shape>/cache_best.json   best cache blocking for this shape
+  workloads/m5out/<kernel>/<shape>/spm/<blocking>/compare_vs_cache_best.txt
+  workloads/m5out/<kernel>/<shape>/spm/<blocking>/spm_stats.txt
 
 Tags may contain '/' to create m5out subdirectories (e.g.
-matmul uses "{M}x{N}x{K}/{bsM}x{bsN}x{bsK}"). Build dirs flatten any
-slashes to '-' since they are intermediate artifacts.
+matmul uses "{M}x{N}x{K}/{bsM}x{bsN}x{bsK}"). The first tag component is the
+shape; the remainder is the blocking/schedule. Build dirs flatten any slashes
+since they are intermediate artifacts.
 """
 from __future__ import annotations
 
@@ -36,6 +36,16 @@ def _flat_tag(tag: str) -> str:
     return tag.replace("/", "-")
 
 
+def split_tag(tag: str) -> tuple[str, str]:
+    """Return (shape, blocking) from a rendered tag."""
+    parts = [part for part in tag.split("/") if part]
+    if not parts:
+        raise ValueError("tag must not be empty")
+    shape = parts[0]
+    blocking = "-".join(parts[1:]) if len(parts) > 1 else "default"
+    return shape, blocking
+
+
 def build_dir(kernel: str, mode: str, tag: str) -> Path:
     _check_mode(mode)
     return BUILD_ROOT / kernel / f"{mode}-{_flat_tag(tag)}"
@@ -47,7 +57,8 @@ def binary_path(kernel: str, mode: str, tag: str) -> Path:
 
 def m5out_dir(kernel: str, mode: str, tag: str) -> Path:
     _check_mode(mode)
-    return M5OUT_ROOT / kernel / tag / mode
+    shape, blocking = split_tag(tag)
+    return M5OUT_ROOT / kernel / shape / mode / blocking
 
 
 def roi_stats_path(kernel: str, mode: str, tag: str) -> Path:
@@ -60,25 +71,26 @@ def run_log_path(kernel: str, mode: str, tag: str) -> Path:
     return m5out_dir(kernel, mode, tag) / "run.log"
 
 
+def shape_dir(kernel: str, tag: str) -> Path:
+    shape, _ = split_tag(tag)
+    return M5OUT_ROOT / kernel / shape
+
+
+def cache_best_path(kernel: str, tag: str) -> Path:
+    return shape_dir(kernel, tag) / "cache_best.json"
+
+
 def compare_path(kernel: str, tag: str) -> Path:
-    return M5OUT_ROOT / kernel / tag / "compare.txt"
+    return m5out_dir(kernel, "spm", tag) / "compare_vs_cache_best.txt"
 
 
 def spm_stats_path(kernel: str, tag: str) -> Path:
     """SPM-only signals (DMA traffic, bank conflicts, etc.) — no cache counterpart."""
-    return M5OUT_ROOT / kernel / tag / "spm_stats.txt"
-
-
-def compare_csv_path(kernel: str, tag: str) -> Path:
-    return M5OUT_ROOT / kernel / tag / "compare.csv"
-
-
-def spm_stats_csv_path(kernel: str, tag: str) -> Path:
-    return M5OUT_ROOT / kernel / tag / "spm_stats.csv"
+    return m5out_dir(kernel, "spm", tag) / "spm_stats.txt"
 
 
 def artifact_stats_path(kernel: str, tag: str) -> Path:
-    return M5OUT_ROOT / kernel / tag / "artifacts.csv"
+    return m5out_dir(kernel, "spm", tag) / "artifacts.txt"
 
 
 def main() -> None:
@@ -93,9 +105,8 @@ def main() -> None:
             "run_log",
             "compare",
             "spm_stats",
-            "compare_csv",
-            "spm_stats_csv",
             "artifact_stats",
+            "cache_best",
         ],
     )
     p.add_argument("kernel")
@@ -106,16 +117,14 @@ def main() -> None:
     if args.what in (
         "compare",
         "spm_stats",
-        "compare_csv",
-        "spm_stats_csv",
         "artifact_stats",
+        "cache_best",
     ):
         fns = {
             "compare": compare_path,
             "spm_stats": spm_stats_path,
-            "compare_csv": compare_csv_path,
-            "spm_stats_csv": spm_stats_csv_path,
             "artifact_stats": artifact_stats_path,
+            "cache_best": cache_best_path,
         }
         print(fns[args.what](args.kernel, args.tag))
     else:

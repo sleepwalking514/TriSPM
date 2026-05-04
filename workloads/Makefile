@@ -8,7 +8,8 @@
 # Common targets:
 #   make build-<kernel>         build SPM + cache binaries (default tag)
 #   make run-<kernel>           SPM run only
-#   make cmp-<kernel>           SPM + cache + saved compare table
+#   make cache-search-<kernel>  run blocking sweep and write cache_best.json
+#   make cmp-<kernel>           compare SPM candidate against cache_best.json
 #   make cmp-<kernel> PRESET=steady
 #   make cmp-<kernel> SET="CHECK_RESULT=0"
 #   make cmp-matmul SET="N=512 M=512 K=512 BLOCK_SIZE_M=64"
@@ -18,8 +19,9 @@
 #   make sweep-matmul SWEEP=size [PRESET=steady] [SET="CHECK_RESULT=0"]
 #
 # Compare output:
-#   workloads/m5out/<kernel>/<tag>/compare.txt   SPM-vs-cache delta
-#   workloads/m5out/<kernel>/<tag>/spm_stats.txt SPM-only signals (DMA, banks)
+#   workloads/m5out/<kernel>/<shape>/cache_best.json
+#   workloads/m5out/<kernel>/<shape>/spm/<blocking>/compare_vs_cache_best.txt
+#   workloads/m5out/<kernel>/<shape>/spm/<blocking>/spm_stats.txt
 #
 # <tag> is rendered from each kernel's experiment.toml [kernel].tag_template.
 # Slashes in the template become subdirectories — matmul uses
@@ -38,7 +40,7 @@
 KERNELS := vector_add matmul layer_norm activation residual_add softmax
 
 PRESET ?=
-SWEEP  ?=
+SWEEP  ?= blocking
 SET    ?=
 GRAPH  ?= layer_norm_qkv
 ENV    ?=
@@ -67,10 +69,11 @@ EXTRA_FLAGS := $(ENV_FLAG) $(EXPECT_SPM_FLAG) $(EXPECT_TIER_JSON_FLAG) $(EXPECT_
 BUILD_TARGETS  := $(addprefix build-,$(KERNELS))
 RUN_TARGETS    := $(addprefix run-,$(KERNELS))
 CMP_TARGETS    := $(addprefix cmp-,$(KERNELS))
+CACHE_SEARCH_TARGETS := $(addprefix cache-search-,$(KERNELS))
 SWEEP_TARGETS  := $(addprefix sweep-,$(KERNELS))
 VERIFY_TARGETS := $(addprefix verify-,$(KERNELS))
 
-.PHONY: all clean verify plan-graph build-graph verify-graph $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
+.PHONY: all clean verify plan-graph build-graph verify-graph $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(CACHE_SEARCH_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
 
 all: $(BUILD_TARGETS)
 
@@ -82,14 +85,18 @@ $(BUILD_TARGETS): build-%:
 $(RUN_TARGETS): run-%:
 	@$(DRIVER) $* --mode spm $(PRESET_FLAG) $(SET_FLAG) $(EXTRA_FLAGS)
 
-# Full comparison: build + run both modes + delta table.
-$(CMP_TARGETS): cmp-%:
-	@$(DRIVER) $* --mode compare $(PRESET_FLAG) $(SET_FLAG) $(EXTRA_FLAGS)
+# Cache search: run cache candidates and write per-shape cache_best.json.
+$(CACHE_SEARCH_TARGETS): cache-search-%:
+	@$(DRIVER) $* --mode cache-search --sweep $(SWEEP) $(PRESET_FLAG) $(SET_FLAG) $(EXTRA_FLAGS)
 
-# Manifest-defined sweep, e.g. `make sweep-matmul SWEEP=size PRESET=steady`.
+# SPM comparison: build + run SPM, compare against existing cache_best.json.
+$(CMP_TARGETS): cmp-%:
+	@$(DRIVER) $* --mode spm-compare $(PRESET_FLAG) $(SET_FLAG) $(EXTRA_FLAGS)
+
+# Manifest-defined cache sweep, e.g. `make sweep-matmul SWEEP=size PRESET=steady`.
 $(SWEEP_TARGETS): sweep-%:
 	@test -n "$(SWEEP)" || { echo "SWEEP=<name> required (see kernel's experiment.toml [sweeps.*])"; exit 2; }
-	@$(DRIVER) $* --mode compare --sweep $(SWEEP) $(PRESET_FLAG) $(SET_FLAG) $(EXTRA_FLAGS)
+	@$(DRIVER) $* --mode cache-search --sweep $(SWEEP) $(PRESET_FLAG) $(SET_FLAG) $(EXTRA_FLAGS)
 
 # Verify SPM markers in LLIR + tier JSON + launcher (build-only, no gem5).
 $(VERIFY_TARGETS): verify-%:

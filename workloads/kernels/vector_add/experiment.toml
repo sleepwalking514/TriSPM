@@ -2,7 +2,7 @@
 name = "vector_add"
 env_prefix = ""
 # Flat tag — vector_add only sweeps SIZE, no need for a 2-level tree.
-tag_template = "n{SIZE}-bs{BLOCK_SIZE}"
+tag_template = "n{SIZE}/bs{BLOCK_SIZE}"
 expect_spm = false
 
 [params]
@@ -16,3 +16,8 @@ c_macros = [
     "BLOCK_SIZE={BLOCK_SIZE}",
     "CHECK_RESULT={CHECK_RESULT}",
 ]
+
+[sweeps.blocking]
+values = [32, 64, 128]
+axis = "BLOCK_SIZE"
+tag_template = "n{SIZE}/bs{BLOCK_SIZE}"

@@ -1,7 +1,7 @@
 [kernel]
 name = "layer_norm"
 env_prefix = ""
-tag_template = "{M}x{N}"
+tag_template = "{M}x{N}/default"
 expect_spm = false
 
 [params]
@@ -115,3 +115,9 @@ M = 512
 N = 1024
 CHECK_RESULT = 1
 LAYERNORM_FLUSH_BEFORE_ROI = 1
+
+[sweeps.blocking]
+values = [
+    { name = "default" },
+]
+tag_template = "{M}x{N}/default"

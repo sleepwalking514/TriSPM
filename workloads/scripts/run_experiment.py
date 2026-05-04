@@ -6,20 +6,21 @@ for the build, and orchestrates spm/cache/compare runs in a single command.
 
 Usage:
   run_experiment.py <kernel> --mode spm
-  run_experiment.py <kernel> --mode compare [--preset steady]
+  run_experiment.py <kernel> --mode cache-search --sweep blocking
+  run_experiment.py <kernel> --mode spm-compare [--preset spm-candidate]
   run_experiment.py <kernel> --mode verify
-  run_experiment.py <kernel> --sweep size [--preset steady]
+  run_experiment.py <kernel> --sweep blocking [--preset steady]
 
 Modes:
   spm       build + run with SPM
   cache     build + run cache-baseline
-  compare   build + run both, then save delta table
+  cache-search  run cache candidates and write per-shape cache_best.json
+  spm-compare   compare one SPM candidate against cache_best.json
   verify    build both, check LLIR for SPM markers + tier JSON
 """
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import re
@@ -147,22 +148,34 @@ def validate_run_result(kernel: str, mode: str, tag: str, params: dict[str, str]
 def remove_compare_outputs(kernel: str, tag: str) -> None:
     for path in (
         trispm_paths.compare_path(kernel, tag),
-        trispm_paths.compare_csv_path(kernel, tag),
         trispm_paths.spm_stats_path(kernel, tag),
-        trispm_paths.spm_stats_csv_path(kernel, tag),
         trispm_paths.artifact_stats_path(kernel, tag),
     ):
         if path.exists():
             path.unlink()
 
 
-def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
-    spm_stats = trispm_paths.roi_stats_path(kernel, "spm", tag)
-    cache_stats = trispm_paths.roi_stats_path(kernel, "cache", tag)
-    compare = trispm_paths.compare_path(kernel, tag)
-    spm_only = trispm_paths.spm_stats_path(kernel, tag)
-    compare_csv = trispm_paths.compare_csv_path(kernel, tag)
-    spm_only_csv = trispm_paths.spm_stats_csv_path(kernel, tag)
+def remove_cache_best_outputs(kernel: str, tags: list[str]) -> None:
+    seen: set[Path] = set()
+    for tag in tags:
+        path = trispm_paths.cache_best_path(kernel, tag)
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.exists():
+            path.unlink()
+
+
+def do_compare_stats(
+    kernel: str,
+    spm_tag: str,
+    cache_tag: str,
+    measure_iters: int,
+) -> None:
+    spm_stats = trispm_paths.roi_stats_path(kernel, "spm", spm_tag)
+    cache_stats = trispm_paths.roi_stats_path(kernel, "cache", cache_tag)
+    compare = trispm_paths.compare_path(kernel, spm_tag)
+    spm_only = trispm_paths.spm_stats_path(kernel, spm_tag)
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "compare_stats.py"),
@@ -171,15 +184,11 @@ def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
         "--measure-iters", str(measure_iters),
         "--output", str(compare),
         "--spm-only-output", str(spm_only),
-        "--csv", str(compare_csv),
-        "--spm-only-csv", str(spm_only_csv),
         "--quiet",
     ]
     run(cmd, echo=False)
     print(f"Compare saved:  {rel_workloads_path(compare)}")
-    print(f"Compare CSV:    {rel_workloads_path(compare_csv)}")
     print(f"SPM-only saved: {rel_workloads_path(spm_only)}")
-    print(f"SPM-only CSV:   {rel_workloads_path(spm_only_csv)}")
 
 
 ARTIFACT_PATTERNS = {
@@ -195,9 +204,14 @@ def count_pattern(text: str, pattern: str) -> int:
     return len(re.findall(pattern, text))
 
 
-def artifact_rows(kernel: str, tag: str) -> list[dict[str, str | int]]:
+def artifact_rows(kernel: str, spm_tag: str, cache_tag: str | None = None) -> list[dict[str, str | int]]:
     rows: list[dict[str, str | int]] = []
+    tag_by_mode = {
+        "spm": spm_tag,
+        "cache": cache_tag or spm_tag,
+    }
     for mode in ("spm", "cache"):
+        tag = tag_by_mode[mode]
         build_dir = trispm_paths.build_dir(kernel, mode, tag)
         for kind, template in ARTIFACT_PATTERNS.items():
             path = build_dir / template.format(kernel=kernel)
@@ -219,11 +233,11 @@ def artifact_rows(kernel: str, tag: str) -> list[dict[str, str | int]]:
     return rows
 
 
-def write_artifact_stats(kernel: str, tag: str) -> None:
-    rows = artifact_rows(kernel, tag)
-    out = trispm_paths.artifact_stats_path(kernel, tag)
+def write_artifact_stats(kernel: str, spm_tag: str, cache_tag: str | None = None) -> None:
+    rows = artifact_rows(kernel, spm_tag, cache_tag)
+    out = trispm_paths.artifact_stats_path(kernel, spm_tag)
     out.parent.mkdir(parents=True, exist_ok=True)
-    headers = (
+    headers = [
         "mode",
         "artifact",
         "path",
@@ -233,11 +247,17 @@ def write_artifact_stats(kernel: str, tag: str) -> None:
         "fence_iorw",
         "spm_dma_wait",
         "spm_dma_enqueue",
-    )
-    with out.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(rows)
+    ]
+    widths = {
+        key: max([len(key), *(len(str(row.get(key, ""))) for row in rows)])
+        for key in headers
+    }
+    def fmt_row(row: dict[str, str | int] | dict[str, str]) -> str:
+        return "  ".join(str(row.get(key, "")).ljust(widths[key]) for key in headers)
+    sep = "  ".join("-" * widths[key] for key in headers)
+    text_rows = [fmt_row({key: key for key in headers}), sep]
+    text_rows += [fmt_row(row) for row in rows]
+    out.write_text("\n".join(text_rows) + "\n")
     print(f"Artifact stats: {rel_workloads_path(out)}")
 
 
@@ -426,12 +446,140 @@ def render_tag(template: str | None, params: dict[str, str], default: str | None
 def apply_preset_to_tag(tag: str, preset: str | None) -> str:
     if not preset:
         return tag
+    if "/" in tag:
+        shape, blocking = tag.split("/", 1)
+        return f"{shape}/{preset}-{blocking}"
     return f"{preset}-{tag}"
 
 
 def default_tag(manifest: dict, params: dict[str, str], preset: str | None) -> str:
     base_tag = render_tag(manifest["kernel"].get("tag_template"), params, default=None)
     return apply_preset_to_tag(base_tag, preset)
+
+
+def stat_value(path: Path, stat_name: str) -> float:
+    for line in path.read_text(errors="replace").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == stat_name:
+            return float(parts[1])
+    raise ValueError(f"{stat_name} not found in {path}")
+
+
+def run_one_mode(
+    kernel: str,
+    manifest: dict,
+    tag: str,
+    run_mode: str,
+    preset: str | None,
+    overrides: dict[str, str],
+    skip_build: bool,
+    should_run: bool = True,
+) -> dict[str, str]:
+    gem5_flags = ["--cache_baseline"] if run_mode == "cache" else []
+    target_params = merged_params(manifest, preset, overrides, mode=run_mode)
+    env = export_env(manifest, target_params)
+    env.update({k: str(v) for k, v in manifest.get("env", {}).items()})
+    if run_mode == "spm":
+        env.update(preset_env(manifest, preset))
+    env.update({k: str(v) for k, v in manifest.get("_cli_env", {}).items()})
+    if not skip_build:
+        do_build(kernel, run_mode, tag, env)
+    if should_run:
+        do_run(kernel, run_mode, tag, gem5_flags, env)
+        validate_run_result(kernel, run_mode, tag, target_params)
+    return target_params
+
+
+def cache_best_record(
+    kernel: str,
+    tag: str,
+    params: dict[str, str],
+    cycles: float,
+) -> dict[str, object]:
+    shape, blocking = trispm_paths.split_tag(tag)
+    return {
+        "kernel": kernel,
+        "shape": shape,
+        "blocking": blocking,
+        "tag": tag,
+        "mode": "cache",
+        "numCycles": int(cycles) if cycles.is_integer() else cycles,
+        "roi_stats": rel_workloads_path(trispm_paths.roi_stats_path(kernel, "cache", tag)),
+        "run_log": rel_workloads_path(trispm_paths.run_log_path(kernel, "cache", tag)),
+        "params": params,
+    }
+
+
+def write_cache_best(kernel: str, tag: str, record: dict[str, object]) -> None:
+    path = trispm_paths.cache_best_path(kernel, tag)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    print(f"Cache best:     {rel_workloads_path(path)}")
+
+
+def load_cache_best(kernel: str, tag: str) -> dict[str, object]:
+    path = trispm_paths.cache_best_path(kernel, tag)
+    if not path.is_file():
+        sys.exit(
+            f"ERROR: cache best is missing for this shape: {rel_workloads_path(path)}\n"
+            "Run cache-search for the shape first."
+        )
+    return json.loads(path.read_text())
+
+
+def do_cache_search(
+    kernel: str,
+    manifest: dict,
+    candidates: list[tuple[str, dict[str, str], dict[str, str], str | None]],
+    skip_build: bool,
+) -> None:
+    best_by_shape: dict[str, tuple[float, str, dict[str, str]]] = {}
+    remove_cache_best_outputs(kernel, [tag for tag, _params, _overrides, _preset in candidates])
+    for tag, params, overrides, preset in candidates:
+        print(f"\n========== cache candidate: {tag} ==========")
+        cache_params = run_one_mode(
+            kernel, manifest, tag, "cache", preset, overrides, skip_build,
+            should_run=True,
+        )
+        cycles = stat_value(
+            trispm_paths.roi_stats_path(kernel, "cache", tag),
+            "system.cpu.numCycles",
+        )
+        print(f"cache numCycles: {cycles:.0f}")
+        shape, _ = trispm_paths.split_tag(tag)
+        best = best_by_shape.get(shape)
+        if best is None or cycles < best[0]:
+            best_by_shape[shape] = (cycles, tag, cache_params)
+
+    if not best_by_shape:
+        sys.exit("ERROR: cache-search had no candidates")
+    for _shape, (cycles, tag, params) in sorted(best_by_shape.items()):
+        write_cache_best(kernel, tag, cache_best_record(kernel, tag, params, cycles))
+
+
+def do_spm_compare(
+    kernel: str,
+    manifest: dict,
+    tag: str,
+    preset: str | None,
+    overrides: dict[str, str],
+    skip_build: bool,
+    params: dict[str, str],
+) -> None:
+    remove_compare_outputs(kernel, tag)
+    best = load_cache_best(kernel, tag)
+    cache_tag = str(best["tag"])
+    cache_stats = trispm_paths.roi_stats_path(kernel, "cache", cache_tag)
+    if not cache_stats.is_file():
+        sys.exit(
+            f"ERROR: cache_best.json points to missing stats: "
+            f"{rel_workloads_path(cache_stats)}"
+        )
+
+    run_one_mode(kernel, manifest, tag, "spm", preset, overrides, skip_build,
+                 should_run=True)
+    do_compare_stats(kernel, tag, cache_tag, int(params.get("MEASURE_ITERS", "1")))
+    write_artifact_stats(kernel, tag, cache_tag)
 
 
 def execute_one(
@@ -444,38 +592,41 @@ def execute_one(
     overrides: dict[str, str],
     skip_build: bool,
 ) -> None:
-    cache_gem5_flags = ["--cache_baseline"]
+    if mode == "cache-search":
+        do_cache_search(
+            kernel,
+            manifest,
+            [(tag, params, overrides, preset)],
+            skip_build,
+        )
+        return
+
+    if mode == "spm-compare":
+        do_spm_compare(kernel, manifest, tag, preset, overrides, skip_build, params)
+        return
 
     # (run_mode, gem5_flags, do_run?)
     targets = {
         "spm":     [("spm",   [],                True)],
-        "cache":   [("cache", cache_gem5_flags,  True)],
-        "compare": [("spm",   [],                True),
-                    ("cache", cache_gem5_flags,  True)],
+        "cache":   [("cache", ["--cache_baseline"],  True)],
         "build":   [("spm",   [],                False),
-                    ("cache", cache_gem5_flags,  False)],
+                    ("cache", ["--cache_baseline"],  False)],
         "verify":  [("spm",   [],                False),
-                    ("cache", cache_gem5_flags,  False)],
+                    ("cache", ["--cache_baseline"],  False)],
     }[mode]
-
-    if mode == "compare":
-        remove_compare_outputs(kernel, tag)
 
     for run_mode, gem5_flags, should_run in targets:
         target_params = merged_params(manifest, preset, overrides, mode=run_mode)
         env = export_env(manifest, target_params)
         env.update({k: str(v) for k, v in manifest.get("env", {}).items()})
-        env.update(preset_env(manifest, preset))
+        if run_mode == "spm":
+            env.update(preset_env(manifest, preset))
         env.update({k: str(v) for k, v in manifest.get("_cli_env", {}).items()})
         if not skip_build:
             do_build(kernel, run_mode, tag, env)
         if should_run:
             do_run(kernel, run_mode, tag, gem5_flags, env)
             validate_run_result(kernel, run_mode, tag, target_params)
-
-    if mode == "compare":
-        do_compare(kernel, tag, int(params.get("MEASURE_ITERS", "1")))
-        write_artifact_stats(kernel, tag)
 
     if mode == "verify":
         ok = do_verify(kernel, tag, manifest)
@@ -486,7 +637,11 @@ def execute_one(
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("kernel")
-    p.add_argument("--mode", choices=("spm", "cache", "compare", "build", "verify"), default="compare")
+    p.add_argument(
+        "--mode",
+        choices=("spm", "cache", "cache-search", "spm-compare", "build", "verify"),
+        default="spm-compare",
+    )
     p.add_argument("--tag", default=None, help="override artifact tag")
     p.add_argument("--preset", default=None, help="apply [presets.<name>] from manifest")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VAL",
@@ -563,18 +718,40 @@ def main() -> None:
         sweep = manifest.get("sweeps", {}).get(args.sweep)
         if sweep is None:
             sys.exit(f"ERROR: sweep {args.sweep!r} not in manifest")
-        axis = sweep["axis"]
-        for value in sweep["values"]:
+        candidates: list[tuple[str, dict[str, str], dict[str, str], str | None]] = []
+        for index, value in enumerate(sweep["values"]):
             sweep_overrides = dict(overrides)
-            sweep_overrides[axis] = str(value)
-            for mirrored in sweep.get("mirror", []):
-                sweep_overrides[mirrored] = str(value)
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    if k == "name":
+                        continue
+                    sweep_overrides[k] = str(v)
+                label = str(value.get("name", f"candidate{index}"))
+            else:
+                axis = sweep.get("axis")
+                if axis is None:
+                    sys.exit(
+                        f"ERROR: sweep {args.sweep!r} scalar values require axis"
+                    )
+                sweep_overrides[axis] = str(value)
+                for mirrored in sweep.get("mirror", []):
+                    sweep_overrides[mirrored] = str(value)
+                label = f"{axis}={value}"
             params = merged_params(manifest, args.preset, sweep_overrides)
-            base_tag = args.tag or render_tag(sweep.get("tag_template"), params, default=f"{axis.lower()}{value}")
+            base_tag = args.tag or render_tag(
+                sweep.get("tag_template"),
+                params,
+                default=label,
+            )
             tag = base_tag if args.tag else apply_preset_to_tag(base_tag, args.preset)
-            print(f"\n========== sweep {args.sweep}: {axis}={value} (tag={tag}) ==========")
-            execute_one(args.kernel, manifest, params, tag, args.mode,
-                        args.preset, sweep_overrides, args.skip_build)
+            if args.mode == "cache-search":
+                candidates.append((tag, params, sweep_overrides, args.preset))
+            else:
+                print(f"\n========== sweep {args.sweep}: {label} (tag={tag}) ==========")
+                execute_one(args.kernel, manifest, params, tag, args.mode,
+                            args.preset, sweep_overrides, args.skip_build)
+        if args.mode == "cache-search":
+            do_cache_search(args.kernel, manifest, candidates, args.skip_build)
         return
 
     params = merged_params(manifest, args.preset, overrides)

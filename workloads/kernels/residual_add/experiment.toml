@@ -1,7 +1,7 @@
 [kernel]
 name = "residual_add"
 env_prefix = "RESIDUAL_ADD_"
-tag_template = "n{SIZE}-bs{BLOCK_SIZE}"
+tag_template = "n{SIZE}/bs{BLOCK_SIZE}"
 expect_spm = false
 
 [params]
@@ -26,3 +26,8 @@ c_macros = [
 WARMUP_ITERS = 2
 MEASURE_ITERS = 5
 FLUSH_BEFORE_ROI = 0
+
+[sweeps.blocking]
+values = [32, 64, 128]
+axis = "BLOCK_SIZE"
+tag_template = "n{SIZE}/bs{BLOCK_SIZE}"

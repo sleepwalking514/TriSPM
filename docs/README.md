@@ -24,8 +24,9 @@ stores; later passes read those chunks back from SPM with `addrspace(3)` loads.
 There are no DMA descriptors, waits, or fences on that path.
 
 Phase 3.5 P0 baseline tooling is in place.  LayerNorm and Softmax have named
-Phase 3.5 presets, compare runs emit CSV plus build-artifact marker counts, and
-`workloads/scripts/phase35_baseline.sh` provides verify/smoke/full suites.  The
+Phase 3.5 presets, compare runs now use per-shape cache-best baselines with text
+reports, and `workloads/scripts/phase35_baseline.sh` provides
+verify/smoke/full suites.  The
 full baseline showed:
 
 - Default LayerNorm remains cache path: `phase35-small` and `phase35-large`
@@ -75,8 +76,9 @@ via `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=row_block_dma`.  The first
 granularity sweep found the current best point at `ROW_BLOCK=2` and
 `ROW_GROUP_BLOCKS=8`: two 8 KiB SPM input buffers, 64 2D DMA transfers,
 524,288 DMA bytes, 12,297 DMA wait-stall cycles, and 3,953,189 SPM cycles vs
-4,346,982 cache cycles (`-9.1%`).  This is now stronger than the CPU-direct
-Softmax row-resident result (`-6.9%`).  Current work remains in P2c/P3
+4,346,982 cache cycles (`-9.1%`).  P2d downgraded this after a schedule audit:
+default policy now requires SPM candidates to beat the best legal cache schedule
+for the same shape.  Current work remains in Phase 3.5 measurement repair/P3
 profitability refit, not Phase 4 graph/fusion.
 
 ## Document Inventory
@@ -125,13 +127,16 @@ Run the workload driver from `workloads/`.  The useful modes are:
 ```bash
 cd workloads
 python3 scripts/run_experiment.py <kernel> --mode verify --preset <preset>
-python3 scripts/run_experiment.py <kernel> --mode compare --preset <preset>
+python3 scripts/run_experiment.py <kernel> --mode cache-search --sweep blocking --preset <preset>
+python3 scripts/run_experiment.py <kernel> --mode spm-compare --preset <preset>
 ```
 
 `verify` is build-only and checks generated artifacts such as LLIR SPM markers,
-DMA/fence markers, tier JSON, and promotion sidecars.  `compare` builds and runs
-both SPM and cache paths under gem5, then writes `compare.csv`,
-`spm_stats.csv`, and `artifacts.csv` under `m5out/<kernel>/<tag>/`.
+DMA/fence markers, tier JSON, and promotion sidecars.  `cache-search` builds and
+runs legal cache candidates for a shape and writes
+`m5out/<kernel>/<shape>/cache_best.json`.  `spm-compare` builds and runs one SPM
+candidate, then compares it against that cache-best baseline and writes text
+reports under `m5out/<kernel>/<shape>/spm/<blocking>/`.
 
 Each kernel's `experiment.toml` has a base `[params]` block plus named
 `[presets.<name>]` blocks.  `--preset <name>` starts from `[params]`, overlays
@@ -140,14 +145,18 @@ that preset's shape/iteration values, then exports them through the kernel's
 environment variables are also exported for that preset.  CLI flags override
 last: use `--set KEY=VALUE` for manifest params and `--env KEY=VALUE` for
 compiler/runtime environment variables.  Unless `--tag` is provided, output tags
-come from `[kernel].tag_template` and are prefixed with the preset name.
+come from `[kernel].tag_template`; the first path component is the shape and the
+remaining path component is the blocking/schedule.  When `--preset` is provided,
+the preset name prefixes the blocking/schedule component so opt-in SPM policy
+variants do not collide.
 
 Current Phase 3.5 P2c commands:
 
 ```bash
 cd workloads
 python3 scripts/run_experiment.py softmax --mode verify --preset phase35-row-block-dma-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row block' --expect-residency-plan 'Softmax x row block'
-python3 scripts/run_experiment.py softmax --mode compare --preset phase35-row-block-dma-large-row
+python3 scripts/run_experiment.py softmax --mode cache-search --sweep blocking --preset phase35-large-row
+python3 scripts/run_experiment.py softmax --mode spm-compare --preset phase35-row-block-dma-large-row
 ```
 
 To continue the row-block DMA granularity/overlap sweep, keep the preset env and
@@ -155,7 +164,7 @@ override only the row-block knobs:
 
 ```bash
 cd workloads
-python3 scripts/run_experiment.py softmax --mode compare --preset phase35-row-block-dma-large-row --set ROW_BLOCK=4 --set ROW_GROUP_BLOCKS=8 --tag p2c-rb4-rg8
+python3 scripts/run_experiment.py softmax --mode spm-compare --preset phase35-row-block-dma-large-row --set ROW_BLOCK=4 --set ROW_GROUP_BLOCKS=8 --tag 128x1024/bn64-rb4-rg8
 ```
 
 The scripted Phase 3.5 suites are:

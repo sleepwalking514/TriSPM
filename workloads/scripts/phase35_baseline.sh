@@ -3,15 +3,13 @@
 #
 # Usage:
 #   ./scripts/phase35_baseline.sh verify   # build-only policy checks
-#   ./scripts/phase35_baseline.sh smoke    # short gem5 compares
+#   ./scripts/phase35_baseline.sh smoke    # short gem5 cache/SPM compare-to-best checks
 #   ./scripts/phase35_baseline.sh full     # full P0 baseline set
 #
 # Outputs:
-#   workloads/m5out/<kernel>/<tag>/compare.txt
-#   workloads/m5out/<kernel>/<tag>/compare.csv
-#   workloads/m5out/<kernel>/<tag>/spm_stats.txt
-#   workloads/m5out/<kernel>/<tag>/spm_stats.csv
-#   workloads/m5out/<kernel>/<tag>/artifacts.csv
+#   workloads/m5out/<kernel>/<shape>/cache_best.json
+#   workloads/m5out/<kernel>/<shape>/spm/<blocking>/compare_vs_cache_best.txt
+#   workloads/m5out/<kernel>/<shape>/spm/<blocking>/spm_stats.txt
 
 set -euo pipefail
 
@@ -83,34 +81,44 @@ run_verify() {
 }
 
 run_smoke() {
-    run_cmd python3 "$DRIVER" layer_norm --mode compare \
+    run_cmd python3 "$DRIVER" layer_norm --mode cache-search --sweep blocking \
+        --preset phase35-small
+    run_cmd python3 "$DRIVER" layer_norm --mode spm-compare \
         --preset phase35-row-resident-small
-    run_cmd python3 "$DRIVER" softmax --mode compare \
+    run_cmd python3 "$DRIVER" softmax --mode cache-search --sweep blocking \
+        --preset phase35-smoke
+    run_cmd python3 "$DRIVER" softmax --mode spm-compare \
         --preset phase35-smoke
 }
 
 run_full() {
     run_verify
     run_smoke
-    run_cmd python3 "$DRIVER" layer_norm --mode compare \
+    run_cmd python3 "$DRIVER" layer_norm --mode cache-search --sweep blocking \
         --preset phase35-small
-    run_cmd python3 "$DRIVER" layer_norm --mode compare \
+    run_cmd python3 "$DRIVER" layer_norm --mode spm-compare \
+        --preset phase35-small
+    run_cmd python3 "$DRIVER" layer_norm --mode cache-search --sweep blocking \
         --preset phase35-large
-    run_cmd python3 "$DRIVER" layer_norm --mode compare \
+    run_cmd python3 "$DRIVER" layer_norm --mode spm-compare \
+        --preset phase35-large
+    run_cmd python3 "$DRIVER" layer_norm --mode spm-compare \
         --preset phase35-row-resident-large
-    run_cmd python3 "$DRIVER" layer_norm --mode compare \
+    run_cmd python3 "$DRIVER" layer_norm --mode spm-compare \
         --preset phase35-row-resident-producer-large
-    run_cmd python3 "$DRIVER" layer_norm --mode compare \
+    run_cmd python3 "$DRIVER" layer_norm --mode spm-compare \
         --preset phase35-d3-small
-    run_cmd python3 "$DRIVER" layer_norm --mode compare \
+    run_cmd python3 "$DRIVER" layer_norm --mode spm-compare \
         --preset phase35-d3-large
-    run_cmd python3 "$DRIVER" softmax --mode compare \
+    run_cmd python3 "$DRIVER" softmax --mode cache-search --sweep blocking \
         --preset phase35-large-row
-    run_cmd python3 "$DRIVER" softmax --mode compare \
+    run_cmd python3 "$DRIVER" softmax --mode spm-compare \
+        --preset phase35-large-row
+    run_cmd python3 "$DRIVER" softmax --mode spm-compare \
         --preset phase35-row-resident-large-row
-    run_cmd python3 "$DRIVER" softmax --mode compare \
+    run_cmd python3 "$DRIVER" softmax --mode spm-compare \
         --preset phase35-row-resident-producer-large-row
-    run_cmd python3 "$DRIVER" softmax --mode compare \
+    run_cmd python3 "$DRIVER" softmax --mode spm-compare \
         --preset phase35-row-block-dma-large-row
 }
 

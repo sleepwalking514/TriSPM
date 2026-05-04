@@ -1,7 +1,7 @@
 [kernel]
 name = "softmax"
 env_prefix = "SOFTMAX_"
-tag_template = "{M}x{N}-bn{BLOCK_N}"
+tag_template = "{M}x{N}/bn{BLOCK_N}-rb{ROW_BLOCK}-rg{ROW_GROUP_BLOCKS}"
 expect_spm = false
 
 [params]
@@ -135,3 +135,14 @@ TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
 TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS = "row_block_dma"
 TRITON_SPM_ROW_RESIDENT_MAX_BYTES = "65536"
 TRITON_SPM_PROMOTION_REPORT = "1"
+
+[sweeps.blocking]
+values = [
+    { BLOCK_N = 64, ROW_BLOCK = 1, ROW_GROUP_BLOCKS = 1 },
+    { BLOCK_N = 64, ROW_BLOCK = 1, ROW_GROUP_BLOCKS = 4 },
+    { BLOCK_N = 64, ROW_BLOCK = 1, ROW_GROUP_BLOCKS = 8 },
+    { BLOCK_N = 64, ROW_BLOCK = 2, ROW_GROUP_BLOCKS = 4 },
+    { BLOCK_N = 64, ROW_BLOCK = 2, ROW_GROUP_BLOCKS = 8 },
+    { BLOCK_N = 64, ROW_BLOCK = 4, ROW_GROUP_BLOCKS = 4 },
+]
+tag_template = "{M}x{N}/bn{BLOCK_N}-rb{ROW_BLOCK}-rg{ROW_GROUP_BLOCKS}"

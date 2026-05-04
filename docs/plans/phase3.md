@@ -109,7 +109,7 @@ automatically:
   prefetch across row blocks.  The flushed ROI compare measures 3,953,189 SPM
   cycles vs 4,346,982 cache cycles (`-9.1%`), with 64 2D DMA transfers,
   524,288 DMA bytes, 12,297 wait-stall cycles, and zero bank conflicts.  This
-  is now treated as matched-schedule evidence only: later audit showed that
+  is now treated as same-schedule evidence only: later audit showed that
   `ROW_BLOCK` / `ROW_GROUP_BLOCKS` dominate both cache and SPM runtime, so
   default reduction promotion still waits for a D3/P3 profitability refit
   against the best legal cache schedule.
@@ -257,7 +257,7 @@ See `three-tier-placement.md` §4.1 for full analysis.
    per-checkpoint stats, and 4K-32K working-set sweep are recorded in
    `../evidence/l2_warming.md`.
 3. ~~Add Phase 6 tooling: `verify-spm-policy`, unified run/compare targets,
-   and a stats CSV parser.~~ Done: `make verify` landed; `make run-<kernel>` / `make cmp-<kernel>` cover unified run/compare targets; `compare_stats.py` extracts metrics to `.txt` and CSV (`--csv` / `--spm-only-csv`). Remaining: Phase 6 comparison tooling.
+   and stats text reports.~~ Done: `make verify` landed; `make run-<kernel>` / `make cmp-<kernel>` cover unified run/compare targets; `compare_stats.py` extracts metrics to `.txt` reports. Current Phase 3.5 comparison uses `cache-search` plus `spm-compare` against `cache_best.json`; remaining Phase 6 comparison tooling moves to the roadmap.
 4. ~~Upgrade reduction lowering from single-buffer prefetch to true
    double-buffer pipelining after the 2-D address fix.~~ Done: the lit
    test now verifies body-top wait + buffer flip + alternate-buffer

@@ -267,7 +267,7 @@ At that point, **until this was fixed nothing in Phase 3 was actually exercised 
 
 15. ~~**End-to-end smoke test**~~: ✅ Done. `make verify` / `make verify-<kernel>` builds both modes and checks each manifest's SPM policy: expected SPM kernels must have `addrspace(3)` + `fence iorw` and non-empty tier JSON, while cache-path kernels must remain clean with empty tier JSON.
 16. ~~**Cache-baseline harness path.**~~ ✅ Done. `make cmp-<kernel>` runs both SPM and cache modes; `make run-<kernel>` runs SPM only. Unified via `run_experiment.py`.
-17. ~~**Stats wiring**~~: ✅ Done. `compare_stats.py` extracts 21 symmetric + 15 SPM-only metrics into `.txt` tables and CSV (`--csv` / `--spm-only-csv`). Remaining: Phase 6 comparison tooling.
+17. ~~**Stats wiring**~~: ✅ Done. `compare_stats.py` extracts 21 symmetric + 15 SPM-only metrics into `.txt` tables. Current Phase 3.5 compare uses `cache-search` plus `spm-compare` against `cache_best.json`; remaining Phase 6 comparison tooling is separate.
 
 ---
 

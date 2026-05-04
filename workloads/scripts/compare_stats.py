@@ -2,18 +2,17 @@
 """Print a compact SPM-vs-cache delta table from two gem5 stats dumps.
 
 Inputs are explicit ROI stats files (one per mode); paths come from
-trispm_paths.roi_stats_path. Two outputs:
+trispm_paths.roi_stats_path. Two text outputs:
   - compare table:  symmetric SPM vs cache signals (cycles, IPC, miss rates,
                     snoop traffic, SIMD activity). One file per (kernel, tag).
   - spm_stats table: SPM-only counters (DMA traffic/latency/stalls, bank
                     conflict, per-port bandwidth). Has no cache counterpart,
-                    so it lives next to compare.txt rather than inside it.
+                    so it lives as a sibling text report.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
 
 
@@ -155,15 +154,6 @@ def render_table(rows: list[tuple[str, ...]], headers: tuple[str, ...]) -> str:
     return "\n".join([fmt_row(headers), sep] + [fmt_row(r) for r in rows])
 
 
-def write_csv(path: Path, rows: list[tuple[str, ...]], headers: tuple[str, ...]) -> None:
-    """Write rows with headers to a CSV file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(headers)
-        writer.writerows(rows)
-
-
 COMPARE_HEADERS: tuple[str, ...] = ("stat", "spm", "cache", "delta")
 
 
@@ -241,10 +231,6 @@ def main() -> None:
     parser.add_argument("--spm-only-output", type=Path, default=None,
                         help="also write SPM-only signals (DMA, banks, ...) to this path")
     parser.add_argument("--quiet", action="store_true", help="do not print when writing --output")
-    parser.add_argument("--csv", type=Path, default=None,
-                        help="write compare table as CSV to this path")
-    parser.add_argument("--spm-only-csv", type=Path, default=None,
-                        help="write SPM-only stats as CSV to this path")
     args = parser.parse_args()
 
     spm = load_stats(args.spm, args.section)
@@ -265,17 +251,6 @@ def main() -> None:
         args.spm_only_output.write_text(spm_only_text + "\n")
         if not args.quiet:
             print(f"SPM-only stats written to {args.spm_only_output}")
-
-    if args.csv:
-        write_csv(args.csv, compare_rows(spm, cache, args.measure_iters), COMPARE_HEADERS)
-        if not args.quiet:
-            print(f"Compare CSV written to {args.csv}")
-
-    if args.spm_only_csv:
-        total_cycles = as_number(spm.get("system.cpu.numCycles"))
-        write_csv(args.spm_only_csv, spm_only_rows(spm, total_cycles), SPM_ONLY_HEADERS)
-        if not args.quiet:
-            print(f"SPM-only CSV written to {args.spm_only_csv}")
 
 
 if __name__ == "__main__":

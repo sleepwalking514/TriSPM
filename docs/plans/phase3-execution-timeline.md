@@ -55,9 +55,9 @@ tasks:
     status: completed
     note: 2026-04-30 完成。随机访问模式（Fisher-Yates shuffle）击败 L2 prefetcher，清晰展示 warming 效应。4K–32K sweep 全尺寸确认 Phase B（DMA 后）近 100% L2 命中 vs Phase D（冷）近 100% miss，2.8× cycle 加速。数据记录于 `../evidence/l2_warming.md`。
   - id: eval-tooling
-    content: 补 `verify-spm-policy`、统一 run/compare target、stats CSV export 和后续 Phase 6 对比工具。
+    content: 补 `verify-spm-policy`、统一 run/compare target、stats text reports 和后续 Phase 6 对比工具。
     status: completed
-    note: 2026-04-29 `verify-spm-fires` 初版落地；2026-05-02 更新为 manifest-driven `verify-spm-policy`（`make verify` / `make verify-<kernel>`，`run_experiment.py --mode verify`），同时检查应命中 SPM 的 workload 和应保持 cache path 的 workload。统一 run target 已由 `make run-<kernel>` / `make cmp-<kernel>` 覆盖。Stats CSV export 已完成（`compare_stats.py --csv` / `--spm-only-csv`）。剩余：Phase 6 对比工具。
+    note: 2026-04-29 `verify-spm-fires` 初版落地；2026-05-02 更新为 manifest-driven `verify-spm-policy`（`make verify` / `make verify-<kernel>`，`run_experiment.py --mode verify`），同时检查应命中 SPM 的 workload 和应保持 cache path 的 workload。统一 run target 已由 `make run-<kernel>` / `make cmp-<kernel>` 覆盖；当前 Phase 3.5 对比改为 `cache-search` 写 `cache_best.json`，再由 `spm-compare` 生成 text reports。剩余：Phase 6 对比工具。
   - id: reduction-2d-addr-bug
     content: 修复 `transformReductionLoop` 2-D 非连续 leading dimension 时 prefetch DRAM offset 计算错误（`phase3-compiler-backlog.md` §C.2），这是正确性 bug 而非 robustness 问题，应在 reduction matcher 泛化之前修复。
     status: completed
@@ -128,7 +128,7 @@ isProject: false
 1. Done: treat matmul P3 as closed under the cold-start headline metric. Keep `p3-prefetch-timing` only as a future small-size optimization lever.
 2. Done: resolve Tier sidecar coverage mismatch. `matmul` hits Tier 3; `vector_add` is intentionally empty; `layer_norm` is intentionally empty by default and hits Tier 3 for mean/variance reduction and final normalize only with `TRITON_ENABLE_SPM_REDUCTIONS=1`.
 3. Done: complete Tier 2 / L2-warming evidence via `../evidence/l2_warming.md`.
-4. Done: complete the Phase 3 tooling baseline: `make verify`, unified `make run-<kernel>` / `make cmp-<kernel>`, and stats CSV export. Remaining Phase 6 comparison tooling moves to the roadmap.
+4. Done: complete the Phase 3 tooling baseline: `make verify`, unified `make run-<kernel>` / `make cmp-<kernel>`, and stats text reports. Current Phase 3.5 compare uses per-shape `cache_best.json`; remaining Phase 6 comparison tooling moves to the roadmap.
 5. Done: fix the `transformReductionLoop` 2-D non-leading-IV prefetch address bug.
 6. Done: implement reduction double-buffer pipelining (`reduction-single-buffer-pipeline`) and record the first `layer_norm` SPM coverage/perf baseline.
 7. Done: finish `phase3-compiler-backlog.md` P1 robustness work, including bail-out cleanup/verification.
@@ -211,7 +211,7 @@ isProject: false
 - **对应 task**：`l2-warming-bench`。
 
 ### Stage 6 — 评测工具化（baseline completed，Phase 6 comparator pending）
-- **已完成**：`make verify` / `make verify-<kernel>` 落地（`run_experiment.py --mode verify`）；`make run-<kernel>` / `make cmp-<kernel>` 已覆盖统一 run/compare target；`compare_stats.py` 提取 21 symmetric + 15 SPM-only 指标到 `.txt`，并支持机器可读 CSV（`--csv` / `--spm-only-csv`）。
+- **已完成**：`make verify` / `make verify-<kernel>` 落地（`run_experiment.py --mode verify`）；`make run-<kernel>` / `make cmp-<kernel>` 已覆盖统一 run/compare target；`compare_stats.py` 提取 21 symmetric + 15 SPM-only 指标到 `.txt`。当前 Phase 3.5 对比先跑 cache blocking sweep 写 `cache_best.json`，再跑 SPM text compare。
 - **剩余**：Phase 6 对比工具。
 - **验证**：matmul、layer_norm、vector_add 均通过 `make verify-<kernel>`；其中 matmul 预期命中 SPM，layer_norm/vector_add 预期保持 cache path（见 `three-tier-placement.md` §4.1）。
 - **范围限制**：不改编译器；不修改 simulator 接口。

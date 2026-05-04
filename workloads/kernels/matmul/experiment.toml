@@ -12,7 +12,7 @@ name = "matmul"
 # kernel.py. matmul's kernel.py reads MATMUL_M etc.
 env_prefix = "MATMUL_"
 # Slashes in tag_template create m5out subdirectories
-# (m5out/matmul/<MxNxK>/<bsMxbsNxbsK>/{spm,cache,compare.txt}).
+# (m5out/matmul/<MxNxK>/{spm,cache}/<bsMxbsNxbsK>/...).
 # Build dirs flatten the slashes back to '-' since they're intermediate.
 # GROUP_SIZE_M and other tuning knobs stay in [params] only — promote
 # them into the tag if they ever become a sweep axis.
@@ -64,4 +64,12 @@ FLUSH_BEFORE_ROI = 0
 axis = "N"
 values = [128, 256]
 mirror = ["M", "K"]   # set M=K=N for each value
+tag_template = "{M}x{N}x{K}/{BLOCK_SIZE_M}x{BLOCK_SIZE_N}x{BLOCK_SIZE_K}"
+
+[sweeps.blocking]
+values = [
+    { BLOCK_SIZE_M = 32, BLOCK_SIZE_N = 32, BLOCK_SIZE_K = 32 },
+    { BLOCK_SIZE_M = 64, BLOCK_SIZE_N = 64, BLOCK_SIZE_K = 32 },
+    { BLOCK_SIZE_M = 64, BLOCK_SIZE_N = 64, BLOCK_SIZE_K = 64 },
+]
 tag_template = "{M}x{N}x{K}/{BLOCK_SIZE_M}x{BLOCK_SIZE_N}x{BLOCK_SIZE_K}"
