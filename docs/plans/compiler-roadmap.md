@@ -607,11 +607,13 @@ lowering to Softmax: 128x1024 / BLOCK_N=64 measured 7,174,501 SPM cycles vs
 currently expressible DMA-prefetch row-resident variant as an opt-in path:
 Softmax remains positive but weaker (`-4.0%`), while LayerNorm regresses badly
 because descriptors and waits are paid per chunk.  P2c then implemented true
-Softmax row-block A/B DMA.  The first `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` cut
-verified but lost (`+4.8%`) because 16 KiB DMA latency was exposed; tuning to
-`ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` now measures 3,953,189 SPM cycles vs
-4,346,982 cache cycles (`-9.1%`) with 64 2D DMA transfers and 12,297 wait-stall
-cycles.  D3 therefore remains a conservative evidence gate, not a final
+Softmax row-block A/B DMA.  The workload source is now canonical again, and the
+row-block/group schedule is an SPM-only compiler transform controlled by
+`SPM_ROW_BLOCK` and `SPM_ROW_GROUP_BLOCKS`.  Against the stock canonical Triton
+CPU cache baseline, adjacent-shape sweeps show `SPM_ROW_BLOCK=2` is stable and
+profitable, while `SPM_ROW_GROUP_BLOCKS` should remain a small shape-sensitive
+tuning set rather than a hard-coded constant.  D3 therefore remains a
+conservative evidence gate, not a final
 reduction-performance closure: it accepts fused matmul evidence, rejects
 streaming reductions and small row-resident reductions, can accept large
 fill-on-first-pass LayerNorm as opt-in evidence, and now needs a P3

@@ -72,6 +72,12 @@ else
         PRODUCER_KEY="$(printf '%s' "$TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS" | tr -cs '[:alnum:]_.-' '_')"
         SPM_CACHE_DIR="${SPM_CACHE_DIR}_producer_${PRODUCER_KEY}"
     fi
+    if [ "${TRITON_SPM_SOFTMAX_INTERNAL_ROW_BLOCK:-0}" = "1" ]; then
+        SPM_CACHE_DIR="${SPM_CACHE_DIR}_softmax_internal_row_block"
+        SOFTMAX_RB_KEY="$(printf '%s' "${TRITON_SPM_SOFTMAX_ROW_BLOCK:-${SOFTMAX_SPM_ROW_BLOCK:-default}}" | tr -cs '[:alnum:]_.-' '_')"
+        SOFTMAX_RG_KEY="$(printf '%s' "${TRITON_SPM_SOFTMAX_ROW_GROUP_BLOCKS:-${SOFTMAX_SPM_ROW_GROUP_BLOCKS:-default}}" | tr -cs '[:alnum:]_.-' '_')"
+        SPM_CACHE_DIR="${SPM_CACHE_DIR}_rb_${SOFTMAX_RB_KEY}_rg_${SOFTMAX_RG_KEY}"
+    fi
     if [ "${TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY:-0}" = "1" ]; then
         SPM_CACHE_DIR="${SPM_CACHE_DIR}_promotion_profitability"
     fi

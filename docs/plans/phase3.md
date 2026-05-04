@@ -101,19 +101,16 @@ automatically:
   overhead is still paid per chunk.  P2b therefore records DMA-prefetch as
   evidence against this one-row schedule, while leaving true row-block DMA as a
   later scheduling problem.
-- Phase 3.5 P2c/P2d/P2e cleaned up Softmax row/block-resident measurement.  The
-  row-block A/B DMA lowering is buildable and correct, but the earlier `-9.1%`
-  result is now treated as same-schedule evidence only.  Softmax now has an
-  explicit `SOFTMAX_SCHEDULE = canonical | row_block` axis and illegal schedule
-  combinations fail at build time.  The current 128x1024 best-cache search picks
-  row-block `rb2/rg8` at 4,291,669 cycles.  Canonical SPM-direct is real but
-  loses to best-cache at 7,175,796 cycles (`+67.2%`); row-block A/B DMA is near
-  parity at 4,312,695 cycles (`+0.5%`) with 64 2D DMA transfers and zero SPM
-  bank conflicts.  A follow-up `ROW_GROUP_BLOCKS=16` diagnostic cuts DMA wait
-  stalls roughly in half but leaves cycles flat, so the remaining bottleneck is
-  SPM row-block load/issue pressure rather than exposed DMA wait.  Standalone
-  Softmax therefore remains default cache path; row-block DMA stays opt-in
-  evidence.
+- Phase 3.5 P2f cleaned up the Softmax policy boundary.  The workload source is
+  again canonical one-row Softmax and is shared by cache and SPM builds.  The
+  formal cache baseline uses stock Triton CPU scheduling with no Softmax
+  row-block rewrite.  The SPM path may recognize the canonical pattern and
+  internally rewrite it to row-block/group DMA residency with
+  `SPM_ROW_BLOCK`/`SPM_ROW_GROUP_BLOCKS` as pass tuning parameters.  Adjacent
+  shape sweeps currently show `SPM_ROW_BLOCK=2` is stable, while
+  `SPM_ROW_GROUP_BLOCKS` is a low-sensitivity shape knob (`rg8` slightly best
+  on 512-column rows, `rg16` slightly best on 128x1024).  Standalone Softmax
+  remains opt-in evidence while reduction defaults stay conservative.
 - Explicit promotion D3 has landed as a conservative opt-in profitability gate.
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the

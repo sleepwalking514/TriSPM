@@ -395,11 +395,10 @@ Landed:
   with the same numeric tile shape but different policy env do not collide.
 - Single-kernel compare artifacts are text-only.  Spreadsheet-style outputs and driver flags
   were removed from the current compare path.
-- Softmax now has an explicit `SOFTMAX_SCHEDULE` axis in the workload manifest
-  and kernel.  `canonical` requires `ROW_BLOCK=1`, `ROW_GROUP_BLOCKS=1`, and one
-  row per program.  `row_block` requires `ROW_BLOCK>1` and exposes the outer
-  row-block group loop used by the row-block DMA lowering.  Illegal combinations
-  fail at build time instead of silently changing the work count.
+- Superseded by P2f: this audit briefly introduced a source-level Softmax
+  schedule axis while repairing result gating.  The current design removes that
+  workload schedule axis and keeps row-block/group formation inside the SPM
+  compiler path only.
 
 Next methodology:
 
@@ -411,94 +410,84 @@ Next methodology:
   `cache-search --sweep blocking` for the shape first, then `spm-compare` for
   one SPM candidate.  If `cache_best.json` already exists, later SPM compares
   reuse it and skip the cache run.
-- Keep one `workloads/kernels/softmax/kernel.py` for now.  The implemented first
-  split is `SOFTMAX_SCHEDULE = canonical | row_block`: `canonical` means one row
-  per program, and `row_block` means one program processes vector row-block
-  tiles.  A scalar `row_group` schedule can still be added later if cache search
-  needs it, but it is no longer implicit in `ROW_GROUP_BLOCKS`.
-- Add manifest presets/sweeps for cache search and SPM search separately.  Cache
-  search should vary legal schedule shape without SPM env vars.  SPM search
-  should use the same correctness gate plus explicit promotion/DMA marker
-  expectations, but it is allowed to prefer a different schedule.
-- Only split into separate `kernel_cache.py` and `kernel_spm.py` after the shared
-  schedule-axis version proves too restrictive.  Keeping one file first avoids
-  hidden semantic drift between cache and SPM kernels while the methodology is
-  being repaired.
+- Keep one canonical `workloads/kernels/softmax/kernel.py`; cache and SPM share
+  that source.  `sweeps.blocking` covers stock canonical cache, while
+  `sweeps.spm_blocking` covers SPM-only row-block/group pass parameters.
 
-Immediate next step:
+Superseded next step:
 
-1. Treat the 128x1024 Softmax results below as the new policy baseline.
-2. Keep standalone Softmax default-off unless a later SPM schedule beats
-   best-cache by a stable margin across repeated runs and adjacent shapes.
-3. After Softmax is stable, repeat the same cache-best-first pattern for the
-   other single kernels.  Kernels with no meaningful blocking axis can use a
-   single `default` candidate so their directory layout still matches the
-   cache-best workflow.
+The P2d/P2e cache row-block audit fixed the result-gate methodology, but P2f
+changes the policy boundary: cache no longer gets a Softmax row-block source
+schedule, and row-block/group scheduling becomes an SPM-only compiler
+transform.
 
-### 2026-05-04 P2e Softmax Schedule Cleanup And Best-Cache Result
+### 2026-05-05 P2f Softmax Canonical Source And SPM-Only Row-Block
 
 Landed:
 
-- `workloads/kernels/softmax/kernel.py` now has explicit schedule semantics:
-  `canonical` is the normal one-row-per-program kernel, while `row_block` is the
-  vector row-block schedule used by the DMA prototype.  Both still lower through
-  the same AOT `softmax` symbol.
-- `workloads/kernels/softmax/harness.c` computes `gridX` from
-  `SOFTMAX_SCHEDULE_ID`, prints the schedule name, and rejects illegal
-  schedule/blocking combinations at compile time.
-- `workloads/kernels/softmax/experiment.toml` now has named canonical presets
-  and a blocking sweep with only legal cache candidates:
-  canonical `rb1/rg1`, row-block `rb2/rg4`, row-block `rb2/rg8`, and row-block
-  `rb4/rg4`.
+- `workloads/kernels/softmax/kernel.py` is back to a clean canonical row-wise
+  Softmax: one Triton program per row, with max, exp/sum, and normalize/store
+  passes over `BLOCK_N` chunks.  It no longer contains `row_block`, `rb`, or
+  `rg` source scheduling branches.
+- The cache baseline uses the original Triton CPU pipeline and canonical source
+  schedule.  Softmax row-blocking is not enabled for cache policy runs.
+- The SPM pipeline can opt in to `row_block_dma` and
+  `TRITON_SPM_SOFTMAX_INTERNAL_ROW_BLOCK=1`.  In that mode
+  `ConvertMemoryToSPM` recognizes the canonical Softmax pattern, rewrites it
+  internally to an outer row-block/group loop, then applies the existing
+  row-block DMA residency lowering.
+- `SPM_ROW_BLOCK` and `SPM_ROW_GROUP_BLOCKS` are now SPM-pass tuning parameters
+  exported through `experiment.toml`/harness macros.  They do not enter the
+  workload kernel source or the formal cache baseline.  The source-side
+  `ROW_BLOCK`/`ROW_GROUP_BLOCKS` and `SOFTMAX_SCHEDULE` controls were removed
+  from Softmax.
+- `sweeps.blocking` is the stock canonical cache-baseline sweep.  The SPM-only
+  row-block candidates live under `sweeps.spm_blocking`.
 
 Validation:
 
 - Default canonical verify: `make verify-softmax`
-- Canonical cache-path verify:
-  `python3 ./scripts/run_experiment.py softmax --mode verify --preset canonical-large-row --expect-spm false --expect-tier-json empty --expect-dma false`
-- Canonical SPM-direct verify:
-  `python3 ./scripts/run_experiment.py softmax --mode verify --preset canonical-spm-direct-large-row --expect-spm true --expect-tier-json empty --expect-dma false --expect-promotion-source 'Softmax x row' --expect-residency-plan 'Softmax x row'`
 - Row-block DMA verify:
   `python3 ./scripts/run_experiment.py softmax --mode verify --preset phase35-row-block-dma-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row block' --expect-residency-plan 'Softmax x row block'`
+- Adjacent-shape sweep command pattern:
+  `python3 ./scripts/run_experiment.py softmax --mode cache-search --set M=<M> --set N=<N> --set BLOCK_N=64`, then
+  `python3 ./scripts/run_experiment.py softmax --mode spm-compare --preset phase35-row-block-dma-large-row --set M=<M> --set N=<N> --set BLOCK_N=64 --set SPM_ROW_BLOCK=<rb> --set SPM_ROW_GROUP_BLOCKS=<rg> --set SPM_INTERNAL_ROW_BLOCK=1`
 
-Best-cache search for 128x1024:
+Current adjacent-shape results vs stock canonical cache baseline:
 
-| Cache candidate | Cycles |
-|---|---:|
-| canonical `rb1/rg1` | 7,778,735 |
-| row-block `rb2/rg4` | 4,292,282 |
-| row-block `rb2/rg8` | 4,291,669 |
-| row-block `rb4/rg4` | 5,614,819 |
+| Shape | Cache canonical | Best measured SPM rb/rg | Best SPM cycles | Delta |
+|---|---:|---|---:|---:|
+| 64x512 | 1,767,368 | rb2 / rg8 | 1,099,942 | -37.8% |
+| 128x512 | 3,492,162 | rb2 / rg8 | 2,179,209 | -37.6% |
+| 128x1024 | 7,538,886 | rb2 / rg16 | 4,312,621 | -42.8% |
+| 256x1024 | 15,447,230 | not completed | not completed | n/a |
 
-SPM candidates versus best-cache `row_block rb2/rg8`:
+SPM tuning observations:
 
-| SPM candidate | Cycles | Result |
-|---|---:|---|
-| canonical SPM-direct fill-on-first-pass | 7,175,796 | `+67.2%` vs best-cache; faster than canonical cache but not policy-competitive |
-| row-block A/B DMA `rb2/rg8` | 4,312,695 | `+0.5%` vs best-cache; correct and near parity, but not a default win |
-| row-block A/B DMA `rb2/rg16` diagnostic | 4,313,160 | `+0.5%` vs best-cache; wait stalls fall to 6,342 cycles, but total time does not improve |
+- `SPM_ROW_BLOCK=2` is the stable useful granularity across the measured
+  shapes.  `SPM_ROW_BLOCK=4` remains correct but is consistently much slower:
+  about `-16%` vs cache on 512-column rows and `-26%` to `-27%` on 1024-column
+  rows, while `rb2` reaches `-38%` to `-43%`.
+- `SPM_ROW_GROUP_BLOCKS` should not be hard-coded as a universal optimum.
+  On 512-column rows, `rg4`, `rg8`, and `rg16` are within about 0.3% of each
+  other, with `rg8` slightly ahead in these runs.  On 128x1024, larger grouping
+  helps a little and `rg16` is best among the measured candidates.
+- 256x1024 completed the stock canonical cache baseline, but the first SPM
+  candidate (`rb2/rg4`) was terminated after running several minutes.  Do not
+  treat that shape as part of the completed SPM tuning sweep yet.
+- The objective is now clean for reporting: cache is stock Triton CPU scheduling
+  on the canonical kernel; row-block is an SPM-only compiler transform.  Cache
+  row-block diagnostics may still be useful as ablations, but they are not the
+  formal baseline and should not be mixed into the headline comparison.
 
-Interpretation:
+Current policy:
 
-- The clean canonical experiment says CPU-direct SPM residency is real
-  (`addrspace(3)`, zero DMA/fence, 1,023,488 SPM read bytes and 524,288 SPM
-  write bytes), but it is not the right standalone Softmax default because the
-  best cache schedule is row-blocked and much faster.
-- The row-block DMA lowering is correct and close to best-cache.  It performs 64
-  2D DMA transfers, moves 524,288 DMA bytes, has 12,528 wait-stall cycles, and
-  has zero SPM bank conflicts in this run.  That is useful implementation
-  evidence, not enough default-policy evidence.
-- A follow-up `ROW_GROUP_BLOCKS=16` diagnostic halves DMA wait stalls
-  (`12,528 -> 6,342`) but leaves total cycles flat
-  (`4,312,695 -> 4,313,160`).  A `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=8` CLI probe
-  is much worse at 5,522,771 cycles because the generated row-block IR/assembly
-  roughly doubles (`addrspace(3) = 1,536`, 11,191 asm lines).  The current
-  bottleneck is therefore not exposed DMA wait; it is the SPM row-block
-  load/issue path and code shape, visible as about `+40.6%` issued
-  `FloatMemRead` versus best-cache even when wait stalls are reduced.
-- Current policy: standalone Softmax stays cache path by default.  Keep
-  row-block DMA as an opt-in schedule and revisit Softmax SPM inside fused
-  attention or after a broader adjacent-shape sweep shows a stable win.
+- Keep standalone Softmax SPM opt-in while the compiler gate remains
+  conservative, but the design is no longer muddled: the workload kernel stays
+  canonical and the SPM system owns row-block/group scheduling.
+- Treat `rb2` as the current default SPM preset, and keep `rg` as either a small
+  preset set (`4/8/16`) or a simple shape-aware choice until more adjacent
+  shapes are measured.
 
 ## Work Items
 

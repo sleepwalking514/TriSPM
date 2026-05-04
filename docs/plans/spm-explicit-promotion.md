@@ -196,11 +196,13 @@ Implemented in D2:
   chunks into the resident row buffer, then later passes reuse the row from SPM.
   This is not the future multi-row row-block double buffer; the current kernel
   schedule still pays descriptor/wait overhead per chunk.
-- P2c adds `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=row_block_dma` for Softmax
-  row-block groups.  The preset now exposes `ROW_BLOCK=2` and
-  `ROW_GROUP_BLOCKS=8`; the lowering allocates two full row-block SPM buffers
-  and DMA-prefetches the next row block while max/sum/normalize consume the
-  current row block.
+- P2f keeps the Softmax workload source canonical and moves row-block grouping
+  fully into the SPM path.  With
+  `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=row_block_dma` and
+  `TRITON_SPM_SOFTMAX_INTERNAL_ROW_BLOCK=1`, the compiler recognizes canonical
+  Softmax, rewrites it internally into row-block groups, and allocates two full
+  row-block SPM buffers.  `SPM_ROW_BLOCK` and `SPM_ROW_GROUP_BLOCKS` are SPM
+  pass tuning parameters, not cache-baseline or workload-kernel knobs.
 - `TRITON_ENABLE_SPM_REDUCTIONS=1` still exercises the older streaming
   reduction coverage path.  If both reduction flags are set, the row-resident
   path stays separate and the streaming path is not mixed in.
@@ -264,12 +266,12 @@ D2 validation results:
   fill-on-first-pass.  LayerNorm is much worse: 32x64 measured 30,538 vs 5,618
   cycles (`+443.6%`), and 512x1024 measured 7,178,094 vs 1,010,763 cycles
   (`+610.2%`) with 65,536 DMA transfers on the large case.
-- P2c true row-block DMA measurements now show a profitable granularity.  The
-  first `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` cut measured 5,346,794 SPM vs
-  5,101,703 cache cycles (`+4.8%`) with 32 2D DMA transfers and 57,169
-  wait-stall cycles.  After tuning, `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` measured
-  3,953,189 SPM vs 4,346,982 cache cycles (`-9.1%`) with 64 2D DMA transfers,
-  524,288 DMA bytes, 12,297 wait-stall cycles, and zero SPM bank conflicts.
+- P2f row-block DMA measurements use stock canonical cache as the formal
+  baseline.  Across 64x512, 128x512, and 128x1024, `SPM_ROW_BLOCK=2` is the
+  stable useful granularity and beats canonical cache by about `38%` to `43%`.
+  `SPM_ROW_BLOCK=4` is correct but consistently slower.  `SPM_ROW_GROUP_BLOCKS`
+  is not a universal constant: `rg8` is slightly ahead on 512-column rows,
+  while `rg16` is slightly ahead on 128x1024.
 
 D2 conclusion:
 
@@ -633,13 +635,13 @@ kernel set: matmul promotes, cache-only elementwise kernels stay clean, and
 LayerNorm/softmax promote only when the row/block-resident strategy is measured
 profitable.
 
-As of the P2c re-audit, Gate A is structurally useful but not closed as a
+As of the P2f cleanup, Gate A is structurally useful but not closed as a
 default reduction-performance policy.  Reductions remain cache path by default:
-Softmax large-row has a measured CPU-direct row-resident SPM win, chunk-DMA
-prefetch is weaker and harmful for LayerNorm, and true Softmax row-block DMA now
-wins at `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8`.  Refit D3 before automatic
-promotion so the default policy can explain both this accepted Softmax case and
-the still-rejected LayerNorm/small-row cases.
+Softmax now has a clean SPM-only row-block transform that beats stock canonical
+cache on adjacent shapes, chunk-DMA prefetch is weaker and harmful for
+LayerNorm, and LayerNorm/small-row cases still need conservative rejection.
+Refit D3 before automatic promotion so the default policy can explain both the
+accepted Softmax SPM-only transform and the still-rejected reduction cases.
 
 Phase 3.5 owns that next task.  See
 `phase3.5-single-kernel-convergence.md` for the concrete pass/code plan:
