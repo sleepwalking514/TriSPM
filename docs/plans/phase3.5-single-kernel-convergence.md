@@ -345,6 +345,66 @@ Interpretation:
   (`-6.9%`).  P2c should now feed D3/P3 profitability refit rather than changing
   default reduction promotion immediately.
 
+### 2026-05-04 P2d Softmax Measurement Audit And Result Gate
+
+Correction:
+
+- The P2c row-block results above remain useful as implementation evidence for
+  the `row_block_dma` lowering, but the performance interpretation is now
+  downgraded.  The matched `spm` vs `cache` comparison used the same row-block
+  schedule for both modes, while later sweeps showed that `ROW_BLOCK` and
+  `ROW_GROUP_BLOCKS` dominate runtime.  This means a matched A/B can show whether
+  an SPM lowering helps a particular schedule, but it cannot prove that SPM beats
+  the best cache kernel.
+- A more serious correctness hole was found in the Softmax schedule controls:
+  `GRID_X = M / (ROW_BLOCK * ROW_GROUP_BLOCKS)` was applied even when
+  `ROW_BLOCK == 1`, but that branch computes only `row = tl.program_id(0)` and
+  does not loop over `ROW_GROUP_BLOCKS`.  Therefore `ROW_BLOCK=1,
+  ROW_GROUP_BLOCKS>1` runs only `M / ROW_GROUP_BLOCKS` rows.  Any results from
+  that shape, including cases where SPM counters are zero and both modes look
+  extremely fast, must be treated as invalid partial-compute data.
+- The earlier `ROW_BLOCK=2` / `ROW_BLOCK=4` row-block runs may still be valid
+  matched-schedule diagnostics after result checking, but they are not sufficient
+  evidence for default Softmax SPM policy.  Default enablement now requires a
+  decoupled search: best legal cache schedule vs best legal SPM schedule.
+
+Landed:
+
+- `run_gem5.sh` now captures gem5 stdout/stderr in
+  `workloads/m5out/<kernel>/<tag>/<mode>/run.log`.
+- `run_experiment.py` now enforces a result gate after every gem5 run when
+  `CHECK_RESULT=1`.  The run must contain `PASS:` and must not contain `FAIL:`,
+  `MISMATCH`, or `SKIP:`.  If the gate fails, the experiment exits with an error
+  that points at `run.log`.
+- `compare` mode removes stale `compare.txt`, `compare.csv`, `spm_stats.txt`,
+  `spm_stats.csv`, and `artifacts.csv` before running.  These files are generated
+  only after both `spm` and `cache` runs pass the result gate, so failed
+  correctness no longer leaves a misleading old comparison table behind.
+
+Next methodology:
+
+- Split Softmax performance reporting into three numbers:
+  `best_cache`, `best_spm`, and matched-schedule diagnostic A/B.  The policy
+  headline is `best_spm` vs `best_cache`; matched A/B is only a lowering
+  diagnostic.
+- Keep one `workloads/kernels/softmax/kernel.py` for now, but add an explicit
+  schedule axis rather than implicitly overloading `ROW_BLOCK` /
+  `ROW_GROUP_BLOCKS`.  A proposed first shape is
+  `SOFTMAX_SCHEDULE = canonical | row_group | row_block`, where `canonical`
+  means one row per program, `row_group` means one program loops over multiple
+  scalar rows, and `row_block` means one program processes vector row-block tiles.
+- Fix the `ROW_BLOCK==1, ROW_GROUP_BLOCKS>1` path before any new sweeps.  Either
+  reject that combination for `canonical`, or implement an explicit row-group
+  loop that computes all rows covered by the launch grid.
+- Add manifest presets/sweeps for cache search and SPM search separately.  Cache
+  search should vary legal schedule shape without SPM env vars.  SPM search
+  should use the same correctness gate plus explicit promotion/DMA marker
+  expectations, but it is allowed to prefer a different schedule.
+- Only split into separate `kernel_cache.py` and `kernel_spm.py` after the shared
+  schedule-axis version proves too restrictive.  Keeping one file first avoids
+  hidden semantic drift between cache and SPM kernels while the methodology is
+  being repaired.
+
 ## Work Items
 
 ### P0. Stabilize The Measurement Baseline
@@ -367,6 +427,9 @@ Tasks:
 - Add CSV fields for reduction-specific counters: SPM CPU reads/writes, DMA
   transfers, DMA wait stall cycles, bank conflicts, `simInsts`, and line count
   if available.
+- Gate gem5 compares on workload correctness.  When `CHECK_RESULT=1`, compare
+  artifacts must only be generated after both `spm` and `cache` logs report
+  `PASS:` and no mismatch/failure markers.
 
 Exit criteria:
 
@@ -496,10 +559,9 @@ Exit criteria:
 - Row-block DMA double buffering has a buildable prototype or a documented
   rejection with measured descriptor/wait overhead and SPM-capacity math.
   P2b built and measured the chunk-DMA prefetch variant; P2c now builds and
-  measures the true Softmax row-block A/B DMA variant.  The current best
-  `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` schedule uses 64 2D DMA transfers and
-  wins (`-9.1%`) because 8 KiB transfers keep latency hideable enough for the
-  row-block compute group.
+  measures the true Softmax row-block A/B DMA variant.  P2d downgrades this to
+  matched-schedule evidence only: the row-block lowering is real, but the
+  performance policy must be re-evaluated against the best legal cache schedule.
 
 ### P3. Profitability Gate Refit
 
@@ -514,6 +576,9 @@ Tasks:
 - Replace row-DMA constants with measured fill-on-first-pass costs:
   SPM writes, later SPM reads, extra instructions, bank conflicts.
 - Keep D3 deterministic: no runtime profiling.
+- Refit Softmax profitability against `best_spm` vs `best_cache`, not only
+  same-schedule A/B.  The same-schedule A/B remains useful for debugging the
+  lowering, but it must not drive default policy by itself.
 - Add separate decisions for:
   - `streaming_reduction_no_residency`,
   - `small_row_spm_overhead`,
@@ -525,7 +590,7 @@ Exit criteria:
 - Small LayerNorm can reject by model.
 - Large LayerNorm can accept as opt-in evidence.
 - Softmax accepts only after measured row/block-resident win or rejects with a
-  clear reason.
+  clear reason against the best legal cache schedule.
 - Default reduction promotion changes only after the measured preset suite has
   a stable threshold and `make verify-*` keeps the expected default cache/SPM
   policies.  Until then, D3 remains evidence-only.

@@ -3,7 +3,7 @@
 
 Layout:
   workloads/build/<kernel>/<spm|cache>-<flat-tag>/   build artifacts (.llir, .s, _test, _launcher.c)
-  workloads/m5out/<kernel>/<tag>/<spm|cache>/        gem5 outdir + stats.txt + roi-stats.txt
+  workloads/m5out/<kernel>/<tag>/<spm|cache>/        gem5 outdir + stats.txt + roi-stats.txt + run.log
   workloads/m5out/<kernel>/<tag>/compare.txt         SPM-vs-cache delta table
   workloads/m5out/<kernel>/<tag>/compare.csv         CSV form of compare.txt
   workloads/m5out/<kernel>/<tag>/spm_stats.txt       SPM-only signals (DMA, banks, ...)
@@ -55,6 +55,11 @@ def roi_stats_path(kernel: str, mode: str, tag: str) -> Path:
     return m5out_dir(kernel, mode, tag) / "roi-stats.txt"
 
 
+def run_log_path(kernel: str, mode: str, tag: str) -> Path:
+    """Captured gem5 stdout/stderr, including the workload PASS/FAIL line."""
+    return m5out_dir(kernel, mode, tag) / "run.log"
+
+
 def compare_path(kernel: str, tag: str) -> Path:
     return M5OUT_ROOT / kernel / tag / "compare.txt"
 
@@ -85,6 +90,7 @@ def main() -> None:
             "binary",
             "m5out_dir",
             "roi_stats",
+            "run_log",
             "compare",
             "spm_stats",
             "compare_csv",
@@ -120,6 +126,7 @@ def main() -> None:
             "binary": binary_path,
             "m5out_dir": m5out_dir,
             "roi_stats": roi_stats_path,
+            "run_log": run_log_path,
         }
         print(fns[args.what](args.kernel, args.mode, args.tag))
 

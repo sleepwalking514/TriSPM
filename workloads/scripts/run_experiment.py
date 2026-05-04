@@ -95,6 +95,13 @@ def rel_workloads_path(path: Path) -> str:
     return str(path.relative_to(WORKLOADS_DIR))
 
 
+def parse_bool_param(params: dict[str, str], name: str, default: bool) -> bool:
+    value = params.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
 def do_build(kernel: str, mode: str, tag: str, env: dict[str, str]) -> None:
     run([str(SCRIPTS_DIR / "build_kernel.sh"), kernel, "--mode", mode, "--tag", tag], env=env)
 
@@ -104,6 +111,49 @@ def do_run(kernel: str, mode: str, tag: str, gem5_flags: list[str], env: dict[st
     if gem5_flags:
         cmd += ["--"] + gem5_flags
     run(cmd, env=env)
+
+
+def validate_run_result(kernel: str, mode: str, tag: str, params: dict[str, str]) -> None:
+    """Fail loudly if a checked workload did not report a clean PASS."""
+    if not parse_bool_param(params, "CHECK_RESULT", default=True):
+        return
+
+    run_log = trispm_paths.run_log_path(kernel, mode, tag)
+    if not run_log.is_file():
+        sys.exit(
+            f"ERROR: {kernel} {mode} result check was enabled, but run log is "
+            f"missing: {rel_workloads_path(run_log)}"
+        )
+
+    text = run_log.read_text(errors="replace")
+    has_pass = re.search(r"\bPASS:", text) is not None
+    bad_lines = [
+        line for line in text.splitlines()
+        if re.search(r"\b(FAIL|MISMATCH|SKIP):", line)
+    ]
+    if has_pass and not bad_lines:
+        print(f"Result gate passed: {kernel} {mode} ({rel_workloads_path(run_log)})")
+        return
+
+    detail = "\n".join(bad_lines[:12]) if bad_lines else "PASS line was not found"
+    sys.exit(
+        f"ERROR: {kernel} {mode} failed result gate for tag={tag!r}.\n"
+        f"Log: {rel_workloads_path(run_log)}\n"
+        f"{detail}\n"
+        "No compare/artifact tables were generated for this run."
+    )
+
+
+def remove_compare_outputs(kernel: str, tag: str) -> None:
+    for path in (
+        trispm_paths.compare_path(kernel, tag),
+        trispm_paths.compare_csv_path(kernel, tag),
+        trispm_paths.spm_stats_path(kernel, tag),
+        trispm_paths.spm_stats_csv_path(kernel, tag),
+        trispm_paths.artifact_stats_path(kernel, tag),
+    ):
+        if path.exists():
+            path.unlink()
 
 
 def do_compare(kernel: str, tag: str, measure_iters: int) -> None:
@@ -408,6 +458,9 @@ def execute_one(
                     ("cache", cache_gem5_flags,  False)],
     }[mode]
 
+    if mode == "compare":
+        remove_compare_outputs(kernel, tag)
+
     for run_mode, gem5_flags, should_run in targets:
         target_params = merged_params(manifest, preset, overrides, mode=run_mode)
         env = export_env(manifest, target_params)
@@ -418,6 +471,7 @@ def execute_one(
             do_build(kernel, run_mode, tag, env)
         if should_run:
             do_run(kernel, run_mode, tag, gem5_flags, env)
+            validate_run_result(kernel, run_mode, tag, target_params)
 
     if mode == "compare":
         do_compare(kernel, tag, int(params.get("MEASURE_ITERS", "1")))

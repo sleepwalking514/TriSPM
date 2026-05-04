@@ -33,6 +33,7 @@ done
 BINARY="$(python3 "$SCRIPT_DIR/trispm_paths.py" binary "$KERNEL" "$MODE" --tag "$TAG")"
 M5OUT_DIR="$(python3 "$SCRIPT_DIR/trispm_paths.py" m5out_dir "$KERNEL" "$MODE" --tag "$TAG")"
 ROI_STATS="$(python3 "$SCRIPT_DIR/trispm_paths.py" roi_stats "$KERNEL" "$MODE" --tag "$TAG")"
+RUN_LOG="$(python3 "$SCRIPT_DIR/trispm_paths.py" run_log "$KERNEL" "$MODE" --tag "$TAG")"
 
 if [ ! -f "$BINARY" ]; then
     echo "ERROR: binary not found: $BINARY" >&2
@@ -49,7 +50,7 @@ echo "  outdir: $M5OUT_DIR"
 echo "  flags:  ${GEM5_ARGS[*]:-<none>}"
 echo ""
 
-$GEM5 --outdir="$M5OUT_DIR" "$GEM5_RUN_SCRIPT" --binary "$BINARY" "${GEM5_ARGS[@]}"
+$GEM5 --outdir="$M5OUT_DIR" "$GEM5_RUN_SCRIPT" --binary "$BINARY" "${GEM5_ARGS[@]}" 2>&1 | tee "$RUN_LOG"
 
 # gem5 dumps stats both at the explicit ROI and again at exit. Keep only
 # the explicit ROI dump for downstream comparison.
@@ -61,3 +62,4 @@ awk '
 
 echo ""
 echo "ROI stats written to $ROI_STATS"
+echo "Run log written to $RUN_LOG"

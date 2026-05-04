@@ -109,9 +109,16 @@ automatically:
   prefetch across row blocks.  The flushed ROI compare measures 3,953,189 SPM
   cycles vs 4,346,982 cache cycles (`-9.1%`), with 64 2D DMA transfers,
   524,288 DMA bytes, 12,297 wait-stall cycles, and zero bank conflicts.  This
-  beats the CPU-direct Softmax row-resident schedule for the same 128x1024
-  shape, but default reduction promotion still waits for a D3/P3 profitability
-  refit.
+  is now treated as matched-schedule evidence only: later audit showed that
+  `ROW_BLOCK` / `ROW_GROUP_BLOCKS` dominate both cache and SPM runtime, so
+  default reduction promotion still waits for a D3/P3 profitability refit
+  against the best legal cache schedule.
+- Phase 3.5 P2d adds a measurement correctness gate and downgrades invalid
+  Softmax schedule data.  `ROW_BLOCK=1, ROW_GROUP_BLOCKS>1` currently launches
+  too few programs for the one-row kernel branch, so those runs are invalid
+  partial-compute data.  `run_experiment.py` now requires `PASS:` in captured
+  gem5 logs whenever `CHECK_RESULT=1`, rejects `FAIL:` / `MISMATCH` / `SKIP:`,
+  and generates compare artifacts only after both modes pass.
 - Explicit promotion D3 has landed as a conservative opt-in profitability gate.
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the
@@ -234,7 +241,8 @@ The MVP framework is landed. Current workload verification confirms:
 - `softmax` row-resident promotion is now opt-in evidence instead of only a
   rejected plan. `phase35-row-resident-large-row` emits accepted `Softmax x
   row` promotion evidence and measured a 6.9% cycle win under flushed ROI.
-  Default Softmax still stays cache path until D3 admission is refit.
+  Default Softmax still stays cache path until D3 admission is refit against a
+  best-cache baseline, not just same-schedule A/B.
   Forcing the old streaming reduction inputs to Tier 2 cacheable still leaves
   that path far slower than cache, so the default-off decision for streaming
   SPM is not just a Tier 3 uncacheable-buffer workaround.
