@@ -101,24 +101,16 @@ automatically:
   overhead is still paid per chunk.  P2b therefore records DMA-prefetch as
   evidence against this one-row schedule, while leaving true row-block DMA as a
   later scheduling problem.
-- Phase 3.5 P2c implements that true Softmax row-block scheduling problem as an
-  opt-in prototype.  The initial `ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` version
-  verified but lost to cache (`+4.8%`) because 16 KiB DMA latency was exposed.
-  A P2c granularity sweep found a better point at `ROW_BLOCK=2`,
-  `ROW_GROUP_BLOCKS=8`: two 8 KiB SPM row-block input buffers with A/B DMA
-  prefetch across row blocks.  The flushed ROI compare measures 3,953,189 SPM
-  cycles vs 4,346,982 cache cycles (`-9.1%`), with 64 2D DMA transfers,
-  524,288 DMA bytes, 12,297 wait-stall cycles, and zero bank conflicts.  This
-  is now treated as same-schedule evidence only: later audit showed that
-  `ROW_BLOCK` / `ROW_GROUP_BLOCKS` dominate both cache and SPM runtime, so
-  default reduction promotion still waits for a D3/P3 profitability refit
-  against the best legal cache schedule.
-- Phase 3.5 P2d adds a measurement correctness gate and downgrades invalid
-  Softmax schedule data.  `ROW_BLOCK=1, ROW_GROUP_BLOCKS>1` currently launches
-  too few programs for the one-row kernel branch, so those runs are invalid
-  partial-compute data.  `run_experiment.py` now requires `PASS:` in captured
-  gem5 logs whenever `CHECK_RESULT=1`, rejects `FAIL:` / `MISMATCH` / `SKIP:`,
-  and generates compare artifacts only after both modes pass.
+- Phase 3.5 P2c/P2d/P2e cleaned up Softmax row/block-resident measurement.  The
+  row-block A/B DMA lowering is buildable and correct, but the earlier `-9.1%`
+  result is now treated as same-schedule evidence only.  Softmax now has an
+  explicit `SOFTMAX_SCHEDULE = canonical | row_block` axis and illegal schedule
+  combinations fail at build time.  The current 128x1024 best-cache search picks
+  row-block `rb2/rg8` at 4,291,669 cycles.  Canonical SPM-direct is real but
+  loses to best-cache at 7,175,796 cycles (`+67.2%`); row-block A/B DMA is near
+  parity at 4,312,695 cycles (`+0.5%`) with 64 2D DMA transfers and zero SPM
+  bank conflicts.  Standalone Softmax therefore remains default cache path;
+  row-block DMA stays opt-in evidence.
 - Explicit promotion D3 has landed as a conservative opt-in profitability gate.
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the

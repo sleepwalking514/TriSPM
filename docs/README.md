@@ -69,17 +69,17 @@ This rejects chunk-DMA for the current one-row program schedule; it does not
 settle a future true row-block DMA schedule, which would need a multi-row
 lifetime to amortize descriptors.
 
-Phase 3.5 P2c now has a true Softmax row-block A/B DMA prototype, still opt-in
-via `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=row_block_dma`.  The first
-`ROW_BLOCK=4`, `ROW_GROUP_BLOCKS=2` cut was correct but slower than cache
-(`+4.8%`) because 16 KiB transfers left too much exposed wait time.  A P2c
-granularity sweep found the current best point at `ROW_BLOCK=2` and
-`ROW_GROUP_BLOCKS=8`: two 8 KiB SPM input buffers, 64 2D DMA transfers,
-524,288 DMA bytes, 12,297 DMA wait-stall cycles, and 3,953,189 SPM cycles vs
-4,346,982 cache cycles (`-9.1%`).  P2d downgraded this after a schedule audit:
-default policy now requires SPM candidates to beat the best legal cache schedule
-for the same shape.  Current work remains in Phase 3.5 measurement repair/P3
-profitability refit, not Phase 4 graph/fusion.
+Phase 3.5 P2e cleaned up Softmax scheduling.  The workload now has explicit
+`SOFTMAX_SCHEDULE = canonical | row_block` semantics, and illegal
+`ROW_BLOCK`/`ROW_GROUP_BLOCKS` combinations fail instead of silently changing
+the work count.  The 128x1024 best-cache search now picks row-block `rb2/rg8`
+at 4,291,669 cycles.  Canonical SPM-direct is real (`addrspace(3)`, zero DMA)
+but loses to best-cache at 7,175,796 cycles (`+67.2%`).  Row-block A/B DMA is
+correct and near parity at 4,312,695 cycles (`+0.5%`) with 64 2D DMA transfers,
+524,288 DMA bytes, and zero SPM bank conflicts, but it is not yet a default win.
+Standalone Softmax therefore remains cache path by default; row-block DMA stays
+opt-in evidence, and Softmax SPM should be revisited inside fused attention or
+after adjacent-shape sweeps show a stable best-cache win.
 
 ## Document Inventory
 
@@ -114,7 +114,7 @@ profitability refit, not Phase 4 graph/fusion.
 | Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
 | Current | Active prototype | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
 | Current | Active gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3 | Conservative profitability evidence landed: accepts existing fused matmul evidence, rejects streaming reductions and small row-resident reductions, and can accept large fill-on-first-pass row-resident evidence while default LayerNorm remains cache path. |
-| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P2c is active: true Softmax row-block A/B DMA is buildable, correct, and now profitable at `ROW_BLOCK=2`, `ROW_GROUP_BLOCKS=8` (`-9.1%`). Next step: fold this evidence into D3/P3 profitability rules while keeping reductions default-off until policy thresholds are refit. |
+| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P2e is active: Softmax schedule cleanup and best-cache comparison landed. Canonical SPM-direct is real but loses to best-cache; row-block DMA is correct and near parity (`+0.5%`) but not a default win. Standalone Softmax stays cache path while reduction policy thresholds remain conservative. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) Gate B | Move to executable attention/fusion and producer-consumer promotion after Phase 3.5 reduction closure. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists; continue correctness/performance tuning and larger-run evaluation. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
@@ -150,12 +150,14 @@ remaining path component is the blocking/schedule.  When `--preset` is provided,
 the preset name prefixes the blocking/schedule component so opt-in SPM policy
 variants do not collide.
 
-Current Phase 3.5 P2c commands:
+Current Phase 3.5 Softmax commands:
 
 ```bash
 cd workloads
+python3 scripts/run_experiment.py softmax --mode verify --preset canonical-spm-direct-large-row --expect-spm true --expect-tier-json empty --expect-dma false --expect-promotion-source 'Softmax x row' --expect-residency-plan 'Softmax x row'
 python3 scripts/run_experiment.py softmax --mode verify --preset phase35-row-block-dma-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row block' --expect-residency-plan 'Softmax x row block'
-python3 scripts/run_experiment.py softmax --mode cache-search --sweep blocking --preset phase35-large-row
+python3 scripts/run_experiment.py softmax --mode cache-search --sweep blocking --preset canonical-large-row
+python3 scripts/run_experiment.py softmax --mode spm-compare --preset canonical-spm-direct-large-row
 python3 scripts/run_experiment.py softmax --mode spm-compare --preset phase35-row-block-dma-large-row
 ```
 

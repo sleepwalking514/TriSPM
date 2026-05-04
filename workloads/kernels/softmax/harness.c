@@ -12,7 +12,8 @@
  *
  * Build with -DM=32 -DN=64 -DBLOCK_N=64, or larger Phase 3.5 rows where
  * N is a multiple of BLOCK_N. Values are rendered from experiment.toml by
- * run_experiment.py.
+ * run_experiment.py. SOFTMAX_SCHEDULE_ID=0 is the canonical one-row schedule;
+ * SOFTMAX_SCHEDULE_ID=1 is the row-block schedule used by the DMA experiment.
  */
 
 #ifndef M
@@ -42,25 +43,62 @@
 #ifndef SOFTMAX_CHECK_RESULT
 #define SOFTMAX_CHECK_RESULT 1
 #endif
+#ifndef SOFTMAX_SCHEDULE_ID
+#define SOFTMAX_SCHEDULE_ID 0
+#endif
 
 static volatile int softmax_check_result = 1;
 
 #if (N % BLOCK_N) != 0
 #error "softmax workload requires N to be divisible by BLOCK_N"
 #endif
-#if (M % ROW_BLOCK) != 0
-#error "softmax row-block workload requires M to be divisible by ROW_BLOCK"
+#if SOFTMAX_SCHEDULE_ID == 0
+#if ROW_BLOCK != 1
+#error "canonical softmax requires ROW_BLOCK=1"
+#endif
+#if ROW_GROUP_BLOCKS != 1
+#error "canonical softmax requires ROW_GROUP_BLOCKS=1"
+#endif
+#elif SOFTMAX_SCHEDULE_ID == 1
+#if ROW_BLOCK <= 1
+#error "row-block softmax requires ROW_BLOCK > 1"
+#endif
+#if ROW_GROUP_BLOCKS <= 0
+#error "row-block softmax requires ROW_GROUP_BLOCKS > 0"
 #endif
 #if (M % (ROW_BLOCK * ROW_GROUP_BLOCKS)) != 0
 #error "softmax row-block workload requires M to be divisible by ROW_BLOCK * ROW_GROUP_BLOCKS"
 #endif
+#else
+#error "unknown SOFTMAX_SCHEDULE_ID"
+#endif
+
+static int softmax_grid_x(void)
+{
+#if SOFTMAX_SCHEDULE_ID == 0
+    return M;
+#else
+    return M / (ROW_BLOCK * ROW_GROUP_BLOCKS);
+#endif
+}
+
+static const char *softmax_schedule_name(void)
+{
+#if SOFTMAX_SCHEDULE_ID == 0
+    return "canonical";
+#else
+    return "row_block";
+#endif
+}
 
 int main(void)
 {
     softmax_check_result = SOFTMAX_CHECK_RESULT;
+    int grid_x = softmax_grid_x();
 
-    printf("softmax: M=%d  N=%d  BLOCK_N=%d  ROW_BLOCK=%d  ROW_GROUP_BLOCKS=%d  warmup=%d  measure=%d  flush=%d  check=%d\n",
-           M, N, BLOCK_N, ROW_BLOCK, ROW_GROUP_BLOCKS,
+    printf("softmax: schedule=%s  M=%d  N=%d  BLOCK_N=%d  ROW_BLOCK=%d  ROW_GROUP_BLOCKS=%d  gridX=%d  warmup=%d  measure=%d  flush=%d  check=%d\n",
+           softmax_schedule_name(), M, N, BLOCK_N, ROW_BLOCK, ROW_GROUP_BLOCKS,
+           grid_x,
            SOFTMAX_WARMUP_ITERS, SOFTMAX_MEASURE_ITERS, SOFTMAX_FLUSH_BEFORE_ROI,
            softmax_check_result);
 
@@ -90,12 +128,12 @@ int main(void)
         flush_caches();
 
     for (int iter = 0; iter < SOFTMAX_WARMUP_ITERS; iter++)
-        softmax_launch(M / (ROW_BLOCK * ROW_GROUP_BLOCKS), 1, 1, x, out);
+        softmax_launch(grid_x, 1, 1, x, out);
 
     m5_reset_stats(0, 0);
 
     for (int iter = 0; iter < SOFTMAX_MEASURE_ITERS; iter++)
-        softmax_launch(M / (ROW_BLOCK * ROW_GROUP_BLOCKS), 1, 1, x, out);
+        softmax_launch(grid_x, 1, 1, x, out);
 
     m5_dump_stats(0, 0);
 
