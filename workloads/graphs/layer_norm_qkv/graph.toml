@@ -2,6 +2,31 @@
 name = "layer_norm_qkv"
 description = "Build/verify fixture for conservative graph placement before a fused LayerNorm + QKV prototype."
 
+[harness]
+source = "harness.c"
+
+[harness.params]
+M = 32
+D_MODEL = 64
+PROJ_N = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 1
+FLUSH_BEFORE_ROI = 1
+
+[harness.build]
+c_macros = [
+    "GRAPH_M={M}",
+    "GRAPH_D_MODEL={D_MODEL}",
+    "GRAPH_PROJ_N={PROJ_N}",
+    "GRAPH_BLOCK_SIZE_M={BLOCK_SIZE_M}",
+    "GRAPH_BLOCK_SIZE_N={BLOCK_SIZE_N}",
+    "GRAPH_BLOCK_SIZE_K={BLOCK_SIZE_K}",
+    "GRAPH_CHECK_RESULT={CHECK_RESULT}",
+    "GRAPH_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+]
+
 [tensors.x]
 kind = "external_input"
 read_only = true

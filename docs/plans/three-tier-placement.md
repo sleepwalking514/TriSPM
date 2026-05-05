@@ -308,7 +308,8 @@ Verification:
 
 ### 6.2 Graph-level placement for transformer pipeline (P0)
 
-Status: **build/verify MVP landed (2026-05-02)**.
+Status: **build/verify MVP landed (2026-05-02); first executable graph smoke
+landed (2026-05-06)**.
 
 Implemented:
 
@@ -325,12 +326,18 @@ Implemented:
 - Verified policy for the first fixture: producer output / intermediate
   activation stays Tier 2; downstream matmul activation input stays Tier 2;
   external read-only Q/K/V weights can be Tier 3; outputs remain Tier 2.
+- `workloads/graphs/layer_norm_qkv/harness.c` is the first executable
+  multi-kernel graph harness. It allocates graph tensors once, publishes
+  LayerNorm inputs and Q/K/V weights, calls `layer_norm_launch` followed by
+  three `matmul_launch` calls over shared runtime pointers, and checks
+  `ln_out`, `q`, `k`, and `v` against a cacheable reference.
+- `workloads/scripts/graph_placement.py --mode run --exec-mode {spm,cache}`
+  now links the graph ELF and runs gem5. The first 32x64 -> Q/K/V smoke passed
+  both SPM and cache result gates. ROI stats are written under
+  `workloads/m5out/graphs/layer_norm_qkv/{spm,cache}/default/`.
 
 Not implemented yet:
 
-- No executable multi-kernel graph harness yet.  The current tool proves
-  generated backing allocation decisions; it does not link multiple AOT
-  kernels, share runtime tensor pointers, or run gem5 for the graph.
 - No graph-vs-cache comparison yet.  Cache baseline policy should keep all
   tensors cacheable unless a specific experiment intentionally studies UC
   backing placement.
@@ -342,9 +349,8 @@ Not implemented yet:
 
 Next work:
 
-- Add an executable graph harness that allocates shared graph tensors once,
-  calls per-node launchers in order, materializes explicit fallback boundaries
-  to Tier 2, and checks results.
+- Add graph-vs-cache reporting from the shared graph manifest so SPM/Tier
+  decisions, cache-only baselines, and graph ROI stats are emitted together.
 - Extend the fixture set from `layer_norm -> qkv` to attention-facing schedules
   (`qk`, softmax, `pv`, residual/activation) once the required shapes and AOT
   symbol naming are settled.

@@ -9,11 +9,13 @@ checked without changing ConvertMemoryToSPM.
 Usage:
   scripts/graph_placement.py layer_norm_qkv --mode plan
   scripts/graph_placement.py layer_norm_qkv --mode verify
+  scripts/graph_placement.py layer_norm_qkv --mode run
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -171,6 +173,218 @@ def build_node(plan: NodePlan) -> None:
     ], env=env)
 
 
+def node_build_dir(plan: NodePlan, mode: str) -> Path:
+    return trispm_paths.build_dir(plan.kernel, mode, plan.tag)
+
+
+def graph_build_dir(graph_name: str, mode: str) -> Path:
+    return trispm_paths.graph_build_dir(graph_name, mode)
+
+
+def graph_binary_path(graph_name: str, mode: str) -> Path:
+    return trispm_paths.graph_binary_path(graph_name, mode)
+
+
+def graph_m5out_dir(graph_name: str, mode: str) -> Path:
+    return trispm_paths.graph_m5out_dir(graph_name, mode)
+
+
+def graph_run_log_path(graph_name: str, mode: str) -> Path:
+    return trispm_paths.graph_run_log_path(graph_name, mode)
+
+
+def graph_roi_stats_path(graph_name: str, mode: str) -> Path:
+    return trispm_paths.graph_roi_stats_path(graph_name, mode)
+
+
+def render_graph_cflags(graph: dict[str, Any]) -> str:
+    harness = dict(graph.get("harness", {}))
+    params = {str(k): str(v) for k, v in dict(harness.get("params", {})).items()}
+    macros = harness.get("build", {}).get("c_macros", [])
+    try:
+        return " ".join(f"-D{macro.format(**params)}" for macro in macros)
+    except KeyError as exc:
+        raise ValueError(
+            f"[harness.build].c_macros references unknown param {exc.args[0]!r}"
+        ) from exc
+
+
+def source_env() -> dict[str, str]:
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(WORKLOADS_DIR / 'env.sh'))}; "
+        "export TRISPM_ROOT LLC LLC_FLAGS CLANG CLANG_FLAGS GEM5 GEM5_RUN_SCRIPT; "
+        "python3 - <<'PY'\n"
+        "import json, os\n"
+        "keys = ['TRISPM_ROOT', 'LLC', 'LLC_FLAGS', 'CLANG', 'CLANG_FLAGS', "
+        "'GEM5', 'GEM5_RUN_SCRIPT']\n"
+        "print(json.dumps({k: os.environ.get(k, '') for k in keys}))\n"
+        "PY"
+    )
+    proc = subprocess.run(
+        ["bash", "-lc", cmd],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    data = json.loads(proc.stdout)
+    env = os.environ.copy()
+    env.update({k: str(v) for k, v in data.items() if v})
+    return env
+
+
+def compile_graph(graph_name: str, graph: dict[str, Any], plans: list[NodePlan], mode: str) -> None:
+    env = source_env()
+    out_dir = graph_build_dir(graph_name, mode)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    plan_by_name = {plan.name: plan for plan in plans}
+    if "layer_norm" not in plan_by_name:
+        sys.exit("ERROR: executable graph harness requires a layer_norm node")
+    matmul_plans = [plan for plan in plans if plan.kernel == "matmul"]
+    if not matmul_plans:
+        sys.exit("ERROR: executable graph harness requires at least one matmul node")
+    matmul_plan = matmul_plans[0]
+
+    ln_dir = node_build_dir(plan_by_name["layer_norm"], mode)
+    mm_dir = node_build_dir(matmul_plan, mode)
+    required = [
+        ln_dir / "layer_norm.s",
+        ln_dir / "layer_norm_launcher.c",
+        ln_dir / "layer_norm_launcher.h",
+        mm_dir / "matmul.s",
+        mm_dir / "matmul_launcher.c",
+        mm_dir / "matmul_launcher.h",
+    ]
+    missing = [path for path in required if not path.is_file()]
+    if missing:
+        detail = "\n".join(f"  {path}" for path in missing)
+        sys.exit(f"ERROR: missing node build artifacts:\n{detail}")
+
+    harness_cfg = dict(graph.get("harness", {}))
+    harness_source = GRAPHS_DIR / graph_name / str(harness_cfg.get("source", "harness.c"))
+    if not harness_source.is_file():
+        sys.exit(f"ERROR: graph harness source not found: {harness_source}")
+
+    graph_cflags = render_graph_cflags(graph)
+    binary = graph_binary_path(graph_name, mode)
+    cmd = [
+        env["CLANG"],
+        *shlex.split(env["CLANG_FLAGS"]),
+        *shlex.split(graph_cflags),
+        f"-I{ln_dir}",
+        f"-I{mm_dir}",
+        f"-I{env['TRISPM_ROOT']}/simulator/src/scratchpad_mem",
+        str(ln_dir / "layer_norm.s"),
+        str(mm_dir / "matmul.s"),
+        str(ln_dir / "layer_norm_launcher.c"),
+        str(mm_dir / "matmul_launcher.c"),
+        str(harness_source),
+        "-lm",
+        "-o",
+        str(binary),
+    ]
+    print(f"\n========== link executable graph ({mode}) ==========")
+    run(cmd, env=env)
+    print(f"  -> {binary.relative_to(WORKLOADS_DIR)}")
+
+
+def build_graph_executable(graph_name: str, graph: dict[str, Any], plans: list[NodePlan], mode: str) -> None:
+    for plan in plans:
+        print(
+            f"\n========== build {plan.name} "
+            f"({mode}, tier_override={plan.tier_override!r}) ==========")
+        if mode == "spm":
+            build_node(plan)
+        else:
+            manifest = run_experiment.load_manifest(plan.kernel)
+            params = run_experiment.merged_params(
+                manifest,
+                preset=None,
+                overrides=plan.params,
+                mode="cache",
+            )
+            env = run_experiment.export_env(manifest, params)
+            run([
+                str(SCRIPTS_DIR / "build_kernel.sh"),
+                plan.kernel,
+                "--mode", "cache",
+                "--tag", plan.tag,
+            ], env=env)
+    compile_graph(graph_name, graph, plans, mode)
+
+
+def run_graph_executable(graph_name: str, mode: str, gem5_flags: list[str]) -> None:
+    env = source_env()
+    binary = graph_binary_path(graph_name, mode)
+    if not binary.is_file():
+        sys.exit(f"ERROR: graph binary not found: {binary}")
+    m5out = graph_m5out_dir(graph_name, mode)
+    run_log = graph_run_log_path(graph_name, mode)
+    roi_stats = graph_roi_stats_path(graph_name, mode)
+    m5out.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        env["GEM5"],
+        f"--outdir={m5out}",
+        env["GEM5_RUN_SCRIPT"],
+        "--binary",
+        str(binary),
+    ]
+    if mode == "cache":
+        cmd.append("--cache_baseline")
+    cmd += gem5_flags
+
+    print(f"\n===== Running graph {graph_name} ({mode}) on gem5 =====")
+    print(f"  binary: {binary}")
+    print(f"  outdir: {m5out}")
+    print(f"  flags:  {' '.join(gem5_flags) if gem5_flags else '<none>'}\n")
+    with run_log.open("w") as log:
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line, end="")
+            log.write(line)
+        status = proc.wait()
+    if status != 0:
+        sys.exit(status)
+
+    stats = m5out / "stats.txt"
+    if stats.is_file():
+        in_block = False
+        with stats.open(errors="replace") as src, roi_stats.open("w") as dst:
+            for line in src:
+                if "---------- Begin Simulation Statistics ----------" in line:
+                    in_block = True
+                if in_block:
+                    dst.write(line)
+                if "---------- End Simulation Statistics" in line and in_block:
+                    break
+        print(f"\nROI stats written to {roi_stats}")
+    print(f"Run log written to {run_log}")
+
+
+def validate_graph_run(graph_name: str, mode: str) -> None:
+    run_log = graph_run_log_path(graph_name, mode)
+    if not run_log.is_file():
+        sys.exit(f"ERROR: graph run log is missing: {run_log}")
+    text = run_log.read_text(errors="replace")
+    bad_lines = [
+        line for line in text.splitlines()
+        if re.search(r"\b(FAIL|MISMATCH):", line)
+    ]
+    if "PASS: graph outputs correct" in text and not bad_lines:
+        print(f"Result gate passed: graph {graph_name} {mode}")
+        return
+    detail = "\n".join(bad_lines[:12]) if bad_lines else "PASS line was not found"
+    sys.exit(
+        f"ERROR: graph {graph_name} {mode} failed result gate.\n"
+        f"Log: {run_log.relative_to(WORKLOADS_DIR)}\n"
+        f"{detail}"
+    )
+
+
 def expected_allocator(tier: int, kernel: str) -> str:
     if tier == TIER_SPM_RESIDENT:
         return "spm_malloc(nbytes)"
@@ -263,7 +477,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("graph", help="graph name under workloads/graphs/<name>/graph.toml")
-    parser.add_argument("--mode", choices=("plan", "build", "verify"), default="plan")
+    parser.add_argument(
+        "--mode",
+        choices=("plan", "build", "verify", "build-exec", "run"),
+        default="plan",
+    )
+    parser.add_argument(
+        "--exec-mode",
+        choices=("spm", "cache"),
+        default="spm",
+        help="mode for executable graph build/run",
+    )
+    parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="run an existing executable graph binary",
+    )
+    parser.add_argument(
+        "--gem5-flag",
+        action="append",
+        default=[],
+        help="extra gem5 run_spm.py flag for executable graph runs",
+    )
     args = parser.parse_args()
 
     graph = load_graph(args.graph)
@@ -292,6 +527,13 @@ def main() -> None:
         if not all_ok:
             sys.exit(1)
         print(f"\n{args.graph}: graph placement verification passed")
+
+    if args.mode in {"build-exec", "run"} and not args.skip_build:
+        build_graph_executable(args.graph, graph, plans, args.exec_mode)
+
+    if args.mode == "run":
+        run_graph_executable(args.graph, args.exec_mode, args.gem5_flag)
+        validate_graph_run(args.graph, args.exec_mode)
 
 
 if __name__ == "__main__":

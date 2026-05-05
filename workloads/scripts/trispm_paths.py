@@ -93,6 +93,28 @@ def artifact_stats_path(kernel: str, tag: str) -> Path:
     return m5out_dir(kernel, "spm", tag) / "artifacts.txt"
 
 
+def graph_build_dir(graph: str, mode: str) -> Path:
+    _check_mode(mode)
+    return BUILD_ROOT / "graphs" / graph / mode
+
+
+def graph_binary_path(graph: str, mode: str) -> Path:
+    return graph_build_dir(graph, mode) / f"{graph}_test"
+
+
+def graph_m5out_dir(graph: str, mode: str) -> Path:
+    _check_mode(mode)
+    return M5OUT_ROOT / "graphs" / graph / mode / "default"
+
+
+def graph_roi_stats_path(graph: str, mode: str) -> Path:
+    return graph_m5out_dir(graph, mode) / "roi-stats.txt"
+
+
+def graph_run_log_path(graph: str, mode: str) -> Path:
+    return graph_m5out_dir(graph, mode) / "run.log"
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -107,11 +129,16 @@ def main() -> None:
             "spm_stats",
             "artifact_stats",
             "cache_best",
+            "graph_build_dir",
+            "graph_binary",
+            "graph_m5out_dir",
+            "graph_roi_stats",
+            "graph_run_log",
         ],
     )
     p.add_argument("kernel")
     p.add_argument("mode", nargs="?", choices=MODES)
-    p.add_argument("--tag", required=True)
+    p.add_argument("--tag")
     args = p.parse_args()
 
     if args.what in (
@@ -120,6 +147,8 @@ def main() -> None:
         "artifact_stats",
         "cache_best",
     ):
+        if args.tag is None:
+            p.error(f"{args.what} requires --tag")
         fns = {
             "compare": compare_path,
             "spm_stats": spm_stats_path,
@@ -127,9 +156,22 @@ def main() -> None:
             "cache_best": cache_best_path,
         }
         print(fns[args.what](args.kernel, args.tag))
+    elif args.what.startswith("graph_"):
+        if args.mode is None:
+            p.error(f"{args.what} requires mode to be one of {MODES}")
+        fns = {
+            "graph_build_dir": graph_build_dir,
+            "graph_binary": graph_binary_path,
+            "graph_m5out_dir": graph_m5out_dir,
+            "graph_roi_stats": graph_roi_stats_path,
+            "graph_run_log": graph_run_log_path,
+        }
+        print(fns[args.what](args.kernel, args.mode))
     else:
         if args.mode is None:
             p.error(f"{args.what} requires mode to be one of {MODES}")
+        if args.tag is None:
+            p.error(f"{args.what} requires --tag")
         fns = {
             "build_dir": build_dir,
             "binary": binary_path,

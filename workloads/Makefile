@@ -15,6 +15,8 @@
 #   make cmp-matmul SET="N=512 M=512 K=512 BLOCK_SIZE_M=64"
 #   make verify-<kernel>          check LLIR for SPM markers + tier JSON
 #   make verify-graph GRAPH=layer_norm_qkv
+#   make build-graph-exec GRAPH=layer_norm_qkv
+#   make run-graph GRAPH=layer_norm_qkv
 #   make verify                   verify all kernels (continues past failures)
 #   make sweep-matmul SWEEP=size [PRESET=steady] [SET="CHECK_RESULT=0"]
 #
@@ -43,6 +45,9 @@ PRESET ?=
 SWEEP  ?= blocking
 SET    ?=
 GRAPH  ?= layer_norm_qkv
+GRAPH_MODE ?= spm
+GEM5_FLAG ?=
+SKIP_BUILD ?=
 ENV    ?=
 EXPECT_SPM ?=
 EXPECT_TIER_JSON ?=
@@ -65,6 +70,7 @@ EXPECT_REJECTION_REASON_FLAG := $(if $(EXPECT_REJECTION_REASON),--expect-rejecti
 EXPECT_REJECTION_SOURCE_FLAG := $(if $(EXPECT_REJECTION_SOURCE),--expect-rejection-source "$(EXPECT_REJECTION_SOURCE)",)
 EXPECT_RESIDENCY_PLAN_FLAG := $(if $(EXPECT_RESIDENCY_PLAN),--expect-residency-plan "$(EXPECT_RESIDENCY_PLAN)",)
 EXTRA_FLAGS := $(ENV_FLAG) $(EXPECT_SPM_FLAG) $(EXPECT_TIER_JSON_FLAG) $(EXPECT_PROMOTION_SOURCE_FLAG) $(EXPECT_REJECTION_REASON_FLAG) $(EXPECT_REJECTION_SOURCE_FLAG) $(EXPECT_RESIDENCY_PLAN_FLAG)
+SKIP_BUILD_FLAG := $(if $(SKIP_BUILD),--skip-build,)
 
 BUILD_TARGETS  := $(addprefix build-,$(KERNELS))
 RUN_TARGETS    := $(addprefix run-,$(KERNELS))
@@ -73,7 +79,7 @@ CACHE_SEARCH_TARGETS := $(addprefix cache-search-,$(KERNELS))
 SWEEP_TARGETS  := $(addprefix sweep-,$(KERNELS))
 VERIFY_TARGETS := $(addprefix verify-,$(KERNELS))
 
-.PHONY: all clean verify plan-graph build-graph verify-graph $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(CACHE_SEARCH_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
+.PHONY: all clean verify plan-graph build-graph verify-graph build-graph-exec run-graph $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(CACHE_SEARCH_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
 
 all: $(BUILD_TARGETS)
 
@@ -110,6 +116,12 @@ build-graph:
 
 verify-graph:
 	@$(GRAPH_DRIVER) $(GRAPH) --mode verify
+
+build-graph-exec:
+	@$(GRAPH_DRIVER) $(GRAPH) --mode build-exec --exec-mode $(GRAPH_MODE)
+
+run-graph:
+	@$(GRAPH_DRIVER) $(GRAPH) --mode run --exec-mode $(GRAPH_MODE) $(SKIP_BUILD_FLAG) $(foreach flag,$(GEM5_FLAG),--gem5-flag=$(flag))
 
 # Verify all kernels (continues past individual failures, reports at end).
 verify:

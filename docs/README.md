@@ -19,9 +19,10 @@ Phase 3.5 is now closed through P4 as a conservative single-kernel reduction
 SPM policy gate.  It does not default-enable standalone reduction SPM; it
 records deterministic opt-in evidence, accepts the measured profitable Softmax
 row-block path, and rejects the measured losing reduction variants.  The
-current implementation focus can move to the Phase 4 executable graph harness
-using the conservative Tier 2 activation backbone and existing single-kernel
-defaults.
+current implementation focus has moved to Phase 4 graph execution.  The first
+`layer_norm -> q/k/v` executable graph harness is landed: it links shared
+LayerNorm and matmul AOT artifacts into one ELF, allocates graph tensors once,
+keeps the activation backbone Tier 2, and passes SPM/cache gem5 smoke checks.
 The old streaming reduction SPM path is correctness/coverage only; it still
 loses badly because it emits many tiny DMA transactions.  The newer LayerNorm
 row-resident path is different: it uses CPU-direct SPM residency.  The first
@@ -105,7 +106,7 @@ systems work moves to Phase 4 graph execution.
 | Status | File | What it is for |
 | --- | --- | --- |
 | Reference | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | Closed Phase 3.5 P4 record: conservative reduction-SPM admission, lifetime, row/block residency, and profitability evidence before any default-policy change. |
-| Current | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) | Three-tier placement design and MVP state: Tier 2/3 plumbing landed; graph-level conservative placement build/verify MVP landed; executable graph harness remains P0. |
+| Current | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) | Three-tier placement design and MVP state: Tier 2/3 plumbing landed; graph-level conservative placement build/verify MVP landed; first executable `layer_norm -> q/k/v` graph smoke landed. |
 | Reference | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) | Explicit promotion record: D1 evidence, D2 opt-in row-resident LayerNorm, and D3/P3 conservative profitability/rejection policy are landed for current single-kernel coverage. |
 | Current | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | Follow-on fused micro-scheduler DMA reuse plan and first correctness implementation after SplitLargeContract exposed repeated B/A DMA costs. |
 | Reference | [`plans/softmax-spm-optimizations.md`](plans/softmax-spm-optimizations.md) | Softmax row-block DMA optimization notes, including the implemented exp-cache path and future layout ideas. |
@@ -132,11 +133,11 @@ systems work moves to Phase 4 graph execution.
 | Past | Done | [`evidence/l2_warming.md`](evidence/l2_warming.md) | Tier 2 L2-warming claim has source-level and microbenchmark evidence. |
 | Past | Done | [`archive/phase3-compiler-backlog.md`](archive/phase3-compiler-backlog.md) P1 | GEMM extra-load matching, reduction multi-load matching, DMA lowering options, and GEMM/reduction bail-out cleanup are complete for the current coverage. |
 | Past | Done | [`archive/phase3.md`](archive/phase3.md) + [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6c | Transformer-facing single-kernel coverage landed for `activation`, `residual_add`, and `softmax`; each builds/verifies as cache path and has flushed ROI smoke compares. |
-| Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
+| Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify and first executable `layer_norm -> q/k/v` gem5 smoke: cacheable activation backbone, selective UC streaming weights, and explicit Tier 1/fusion non-goals. |
 | Past | Done | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
 | Past | Done | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3/P3 | Conservative profitability evidence landed: accepts fused matmul and Softmax row-block evidence, rejects streaming reductions, small row-resident reductions, producer-store, and chunk-DMA, while default standalone reduction SPM remains off. |
 | Past | Done | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) P4 | Phase 3.5 is closed as a conservative admission-control guardrail, not an automatic profiler or default-enablement claim. |
-| Current | Next implementation | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.2 | Build the executable cross-kernel graph harness with conservative Tier 2 activation backbone and existing single-kernel defaults; producer-consumer SPM promotion remains later. |
+| Current | Next implementation | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.2 | Extend the executable graph harness toward attention-facing schedules and graph-vs-cache reporting; producer-consumer SPM promotion remains later. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists. Default `windowK=4` remains conservative; `windowK=auto`/autotune should be evidence-driven and queue-depth-aware. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |

@@ -660,7 +660,7 @@ that should remain cache-only. Need at least 5 representative kernels:
 | activation (SiLU) | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
 | residual_add | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
 | softmax | reduction | cache path by default; opt-in row-block SPM accepted by P3 | Done for smoke coverage and Phase 3.5 P4 opt-in evidence; default enablement remains future policy work |
-| layer_norm -> qkv graph | graph placement | activation Tier 2, external weights Tier 3 | Build/verify MVP done; executable harness pending |
+| layer_norm -> qkv graph | graph placement | activation Tier 2, external weights Tier 3 | Build/verify MVP done; executable SPM/cache gem5 smoke passed |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | cache path by default | P2 — diversify workload mix |
 
@@ -701,7 +701,7 @@ Phase 1 (AOT cross-compile) ✅ COMPLETE
               │     └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
                     ├─ 6a Cache baseline [Phase 3 matmul/layer_norm baseline ready]
-                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + graph build/verify done; executable graph pending]
+                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + first executable graph smoke done; graph-vs-cache reporting pending]
                     ├─ 6c Additional workloads [after Phase 3.5/4 pattern support]
                     ├─ 6d Breakdown analysis [built on 6a data]
                     ├─ 6e Area comparison [independent, can start anytime]
