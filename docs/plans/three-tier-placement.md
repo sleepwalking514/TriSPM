@@ -117,9 +117,10 @@
 - `three-tier-placement.md` 负责跨 kernel backing allocation：默认
   cacheable Tier 2 backbone、选择性 Tier 3 streaming input、未来 Tier 1 hot
   state。
-- `phase3.5-single-kernel-convergence.md` 负责单 kernel / fused-region 内的
-  SPM residency：admission、lifetime、显式 buffer rotation / replacement、和
-  reduction profitability。
+- `phase3.5-single-kernel-convergence.md` 已在 P4 收尾为 conservative
+  admission-control guardrail。它负责单 kernel / fused-region 内的 SPM
+  residency：admission、lifetime、显式 buffer rotation / replacement、和
+  reduction profitability；但默认 standalone reduction SPM 仍关闭。
 - 因此，cross-kernel 先走 cacheable + optional fusion；不要依赖普通 Triton
   GPU 风格 shared memory 跨 kernel 保留，也不要把 Tier 3 当成长期 tensor
   属性。

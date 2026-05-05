@@ -48,6 +48,14 @@ run_verify() {
         --expect-dma true \
         --expect-promotion-source "Softmax x row block" \
         --expect-residency-plan "Softmax x row block"
+    run_cmd python3 "$DRIVER" softmax --mode verify \
+        --preset phase35-p3-row-block-dma-exp-cache-large-row \
+        --expect-spm true \
+        --expect-tier-json empty \
+        --expect-dma true \
+        --expect-promotion-source "Softmax x row block" \
+        --expect-promotion-reason accepted_block_resident_fill_first \
+        --expect-residency-plan "Softmax x row block"
     run_cmd python3 "$DRIVER" layer_norm --mode verify \
         --preset phase35-row-resident-small \
         --expect-spm true \
@@ -70,7 +78,7 @@ run_verify() {
         --preset phase35-d3-small \
         --expect-spm false \
         --expect-tier-json empty \
-        --expect-rejection-reason insufficient_row_work \
+        --expect-rejection-reason small_row_spm_overhead \
         --expect-residency-plan "LayerNorm x row"
     run_cmd python3 "$DRIVER" layer_norm --mode verify \
         --preset phase35-d3-large \
@@ -120,6 +128,8 @@ run_full() {
         --preset phase35-row-resident-producer-large-row
     run_cmd python3 "$DRIVER" softmax --mode spm-compare \
         --preset phase35-row-block-dma-large-row
+    run_cmd python3 "$DRIVER" softmax --mode spm-compare \
+        --preset phase35-p3-row-block-dma-exp-cache-large-row
 }
 
 case "$suite" in

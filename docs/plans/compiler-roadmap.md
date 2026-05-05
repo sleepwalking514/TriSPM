@@ -612,12 +612,14 @@ row-block/group schedule is an SPM-only compiler transform controlled by
 `SPM_ROW_BLOCK` and `SPM_ROW_GROUP_BLOCKS`.  Against the stock canonical Triton
 CPU cache baseline, adjacent-shape sweeps show `SPM_ROW_BLOCK=2` is stable and
 profitable, while `SPM_ROW_GROUP_BLOCKS` should remain a small shape-sensitive
-tuning set rather than a hard-coded constant.  D3 therefore remains a
-conservative evidence gate, not a final
-reduction-performance closure: it accepts fused matmul evidence, rejects
-streaming reductions and small row-resident reductions, can accept large
-fill-on-first-pass LayerNorm as opt-in evidence, and now needs a P3
-profitability refit for the accepted Softmax row-block DMA case. See
+tuning set rather than a hard-coded constant.  Phase 3.5 P4 now closes this as
+a conservative admission-control gate, not a profile-guided optimizer or a
+default reduction-performance claim: it accepts fused matmul evidence, rejects
+streaming reductions, small row-resident reductions, producer-store, and
+chunk-DMA, can accept large fill-on-first-pass LayerNorm as opt-in evidence,
+and records Softmax row-block DMA/exp-cache as accepted opt-in evidence against
+the best legal cache baseline. Default standalone reduction SPM remains
+conservative and off. See
 `spm-explicit-promotion.md` and `phase3.5-single-kernel-convergence.md`.
 
 First targets:
@@ -634,12 +636,13 @@ First targets:
   large-row shape.  The opt-in exp-cache path
   (`TRITON_SPM_SOFTMAX_CACHE_EXP=1`) improves the current row-block results by
   about 20 percentage points on the measured 64x512, 128x512, and 128x1024
-  shapes.  Phase 3.5 should move this evidence into the D3 profitability refit
-  before changing defaults.
+  shapes.  Phase 3.5 P4 moved this evidence into the P3 profitability gate as
+  opt-in acceptance while keeping default reduction SPM off.
 - Keep reduction SPM default-off unless the promotion path beats cache on the
   existing 32x64 and 512x1024 comparisons.  LayerNorm fill-on-first-pass is
-  near parity but not yet a clear default; Softmax large-row is promising.
-  Phase 3.5 refits D3 around measured SPM store/read overhead.
+  near parity but not yet a clear default; Softmax row-block is accepted as
+  opt-in evidence.  Future default-policy changes need more measured shapes and
+  an explicit deterministic gate update.
 
 ### 6c. Expand Workload Coverage [P1]
 
@@ -656,7 +659,7 @@ that should remain cache-only. Need at least 5 representative kernels:
 | layer_norm | reduction | cache path by default; opt-in double-buffer coverage | Default fixed; SPM reduction remains performance blocker |
 | activation (SiLU) | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
 | residual_add | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
-| softmax | reduction | cache path by default; opt-in SPM only if measured useful | Done for row-wise smoke coverage; promotion/perf experiments remain |
+| softmax | reduction | cache path by default; opt-in row-block SPM accepted by P3 | Done for smoke coverage and Phase 3.5 P4 opt-in evidence; default enablement remains future policy work |
 | layer_norm -> qkv graph | graph placement | activation Tier 2, external weights Tier 3 | Build/verify MVP done; executable harness pending |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | cache path by default | P2 — diversify workload mix |
@@ -693,8 +696,8 @@ SPM vs cache cost-effectiveness at equal silicon area:
 Phase 1 (AOT cross-compile) ✅ COMPLETE
   └─> Phase 2 (DMA dialect ops + address spaces + lowering) ✅ COMPLETE
         └─> Phase 3 (SPM pass: GEMM → reduction → data placement) ✅ matmul/compiler robustness closed
-              ├─> Phase 3.5 (single-kernel reduction SPM policy) ← CURRENT POLICY GATE
-              ├─> Phase 4 (executable graph harness + attention/multi-kernel SPM) ← NEXT IMPLEMENTATION
+              ├─> Phase 3.5 (single-kernel reduction SPM policy) ✅ conservative gate closed
+              ├─> Phase 4 (executable graph harness + attention/multi-kernel SPM) ← CURRENT IMPLEMENTATION
               │     └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
                     ├─ 6a Cache baseline [Phase 3 matmul/layer_norm baseline ready]

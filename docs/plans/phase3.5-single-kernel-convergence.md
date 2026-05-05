@@ -1,17 +1,18 @@
 # Phase 3.5 Single-Kernel SPM Convergence Plan
 
-> Status: active plan, updated 2026-05-05.
+> Status: P4 closeout complete, updated 2026-05-05.
 > This phase exists because the LayerNorm re-audit showed that reduction SPM
-> was not fundamentally settled.  As of 2026-05-05, this phase should gate
-> default reduction-SPM policy, not block the Phase 4 executable graph harness
-> or conservative cross-kernel placement work.
+> was not fundamentally settled.  As of 2026-05-05, Phase 3.5 is closed as a
+> conservative admission-control guardrail: it gates future default
+> reduction-SPM policy changes, but the current implementation focus moves to
+> the Phase 4 executable graph harness and conservative cross-kernel placement
+> work.
 
 ## Goal
 
-Phase 3.5 closes the single-kernel SPM performance policy before making new
-default SPM-promotion decisions.  It should run in parallel with Phase 4 graph
-execution once conservative cross-kernel backing placement is available.  The
-target is not "make every kernel use SPM"; it is:
+Phase 3.5 closed the current single-kernel SPM performance policy before making
+new default SPM-promotion decisions.  The target was not "make every kernel use
+SPM"; it was:
 
 - `matmul` remains the mature SPM path.
 - Low-reuse elementwise kernels stay cache path unless fused.
@@ -28,11 +29,11 @@ The immediate success bar is stricter than "correct and near parity":
 | `matmul` | SPM path | no regression under existing `make verify-matmul` and headline compare |
 | `activation`, `residual_add`, `vector_add` | cache path | only revisit inside fusion or producer-consumer schedules |
 
-Softmax has an extra admission caveat.  The current smoke workload keeps
-`N == BLOCK_N`, so the row is loaded once and reused mainly in registers.  That
-is useful coverage, but it is not enough evidence for SPM row/block residency.
-Phase 3.5 must add a larger multi-block row shape before judging Softmax
-promotion profitable.
+Softmax had an extra admission caveat: the original smoke workload kept
+`N == BLOCK_N`, so the row was loaded once and reused mainly in registers.  P0
+added larger multi-block row coverage, P2f restored the cache baseline to the
+stock canonical source, and P3 now accepts only the measured profitable
+row-block SPM path as opt-in evidence.
 
 ## Phase 4 Handoff Boundary
 
@@ -48,10 +49,11 @@ Safe to start Phase 4 now:
 - Graph-level placement MVP already keeps intermediate activations cacheable
   Tier 2 and reserves Tier 3 for external read-only streaming inputs/weights.
 
-Still owned by Phase 3.5 while Phase 4 proceeds:
+Phase 3.5 guardrails that remain after P4 closeout:
 
-- Do not turn reduction SPM on by default until D3 is refit against best legal
-  cache baselines and measured thresholds.
+- Do not turn reduction SPM on by default without extending the measured shape
+  table and updating the deterministic P3 gate against best legal cache
+  baselines.
 - Keep `windowK`/`microM` tuning deterministic and conservative by default.
   Autotune/sweep evidence may improve perf builds, but should not be required
   for graph correctness.
@@ -66,7 +68,7 @@ clone:
 
 | Idea | GPU analogue | Current TriSPM status | Phase 3.5 action |
 |---|---|---|---|
-| Admission | Only some loads become shared-memory/async-copy operands; normal `tl.load` may stay global/cache | D1/D3 evidence exists, but reduction thresholds were based on flawed row-DMA data | Refit reduction admission around reuse and measured SPM store/read overhead |
+| Admission | Only some loads become shared-memory/async-copy operands; normal `tl.load` may stay global/cache | D1/D3/P3 evidence exists; the first P3 refit uses best-cache-baseline vocabulary | Keep default reduction SPM off until more measured shapes justify a deterministic policy update |
 | Lifetime | `ttg.local_alloc` / `local_load` / `local_store` are scoped to a block/kernel region | `SPMSpaceManager` tracks Function/Loop/Temporary, but `free()` is still a stub and reductions are ad hoc | Introduce a reduction residency plan with explicit row/block lifetime and report fields |
 | Replacement | GPU pipelines use explicit double/ring buffers and stage indices, not hardware LRU | GEMM and old streaming reduction have local double-buffer logic; row-resident reduction has one resident row; no generic reduction buffer plan | Add explicit buffer role/rotation model: resident row, optional ping-pong chunk, and optional output/temp slots |
 | Cross-kernel | Shared memory does not persist across normal Triton launches; cross-kernel data goes through global memory/L2 unless fused | Three-tier graph placement already plans cacheable Tier 2 backbone plus optional fusion/Tier 1 later | Keep Phase 4 as cacheable-boundary first, fusion second; do not depend on cross-kernel SPM persistence for Phase 3.5 |
@@ -140,7 +142,7 @@ Validation already run:
 - `python3 scripts/run_experiment.py softmax --mode verify --preset phase35-large-row`
 - LayerNorm row-resident small verify, including accepted `LayerNorm x row`
   promotion evidence and empty tier JSON.
-- LayerNorm D3 small verify, including `insufficient_row_work` rejection and
+- LayerNorm D3 small verify, including `small_row_spm_overhead` rejection and
   cache-path IR.
 - Softmax `phase35-smoke` compare under gem5 with result checking.
 
@@ -155,7 +157,7 @@ Full baseline results:
   nonzero `system.spm.*` CPU read/write counters, and 1,015,329 vs 1,010,763
   cycles (`+0.5%`).
 - D3 behaves as a conservative evidence gate: small rows reject as
-  `insufficient_row_work` and stay cache path; large rows accept as opt-in
+  `small_row_spm_overhead` and stay cache path; large rows accept as opt-in
   evidence but still measure slightly slower (1,016,009 vs 1,013,120 cycles,
   `+0.3%`).  This is not enough to default-enable reduction promotion.
 - Softmax smoke and large-row runs are cache-path baselines.  They have no
@@ -703,13 +705,53 @@ Measured result vs stock canonical cache baseline:
 
 Policy implication:
 
-- Softmax now has strong SPM-only row-block evidence, but default reduction
-  promotion still needs the P3 profitability refit so the compiler can accept
-  this case while continuing to reject LayerNorm and small-row reductions.
-- Keep exp-cache under an explicit env flag until the refit records it as part
-  of an accepted Softmax policy.
+- Softmax now has strong SPM-only row-block evidence.  The first P3 refit
+  records this as accepted opt-in evidence while continuing to reject LayerNorm
+  default promotion and small-row reductions.
+- Keep exp-cache under an explicit env flag until a later policy update decides
+  whether it should become part of default standalone Softmax promotion.
 
 ### P3. Profitability Gate Refit
+
+Status: first P3 refit landed on 2026-05-05.  The compiler still does not
+default-enable standalone reduction SPM, but the deterministic profitability
+sidecar now uses the Phase 3.5 best-baseline policy vocabulary:
+
+- Model name: `phase35_p3_static_best_baseline_v1`.
+- Baseline field: `best_legal_cache_schedule`, so Softmax policy is not based
+  on same-schedule A/B evidence.
+- Extra evidence fields: `spm_write_bytes`, `spm_read_bytes`,
+  `estimated_extra_ops`, and `measured_bank_conflicts`.
+- Decisions:
+  - `streaming_reduction_no_residency` rejects old tiny-chunk streaming DMA.
+  - `small_row_spm_overhead` rejects small row residency.
+  - `producer_store_spm_overhead` rejects the producer-store row schedule.
+  - `chunk_dma_spm_overhead` rejects one-row chunk-DMA prefetch.
+  - `accepted_row_resident_fill_first` accepts large CPU-direct row residency
+    as opt-in evidence.
+  - `accepted_block_resident_fill_first` accepts the measured Softmax
+    row-block DMA/exp-cache path as opt-in evidence against best cache.
+
+The workload suite now has P3 Softmax presets
+`phase35-p3-row-block-dma-large-row` and
+`phase35-p3-row-block-dma-exp-cache-large-row`.  The exp-cache env participates
+in the Triton compile-cache key, so exp-cache builds cannot reuse stale
+row-block-only IR.
+
+Validation run:
+
+- Rebuilt `triton-opt` and `libtriton.so` with Ninja.
+- Direct `llvm-lit` is still blocked by the local lit site-config issue, so the
+  focused MLIR checks were run manually with the built `triton-opt` and
+  FileCheck prefixes for the promotion-report and row-resident tests.
+- `./scripts/phase35_baseline.sh verify` passed from `workloads/`, including
+  LayerNorm `small_row_spm_overhead` rejection and Softmax P3
+  `accepted_block_resident_fill_first` acceptance.
+- Focused P3 Softmax verify passed for both
+  `phase35-p3-row-block-dma-large-row` and
+  `phase35-p3-row-block-dma-exp-cache-large-row`; exp-cache reports
+  `required_spm_slots = 3`.
+- `make -C workloads verify-matmul` passed.
 
 Files:
 
@@ -743,6 +785,25 @@ Exit criteria:
 
 ### P4. Documentation And Default Policy Update
 
+Status: complete on 2026-05-05.  Phase 3.5 is closed as a conservative
+single-kernel admission-control gate, not as an automatic profiler or a default
+standalone reduction-SPM enablement claim.
+
+Closeout decisions:
+
+- Phase 4 executable graph harness is unblocked and should start from the
+  conservative Tier 2 activation backbone plus existing single-kernel defaults.
+- Default standalone reduction SPM remains off.  Softmax row-block DMA/exp-cache
+  is accepted as opt-in evidence under
+  `accepted_block_resident_fill_first`; LayerNorm, producer-store, chunk-DMA,
+  and streaming reductions stay rejected or opt-in-only as documented in P3.
+- Future default-policy changes must extend the measured shape table and update
+  the deterministic gate deliberately.  Do not claim that the current gate
+  self-discovers profitable LayerNorm changes or replaces autotuning/profiling.
+- Cross-kernel backing placement remains owned by `three-tier-placement.md`;
+  SPM residency remains single-kernel or fused-region scoped unless Tier 1 is
+  explicitly implemented.
+
 Files:
 
 - `docs/README.md`
@@ -753,12 +814,12 @@ Files:
 
 Tasks:
 
-- Allow the Phase 4 executable graph harness to start now using the conservative
+- [x] Allow the Phase 4 executable graph harness to start now using the conservative
   Tier 2 activation backbone and existing single-kernel defaults.
-- Keep Phase 3.5 as the gate for changing default reduction-SPM policy.
-- Document that Tier 2 is the cross-kernel default, while SPM residency is
+- [x] Keep Phase 3.5 as the gate for changing default reduction-SPM policy.
+- [x] Document that Tier 2 is the cross-kernel default, while SPM residency is
   single-kernel or fused-region scoped unless Tier 1 is explicitly implemented.
-- Record measured reduction thresholds rather than treating cache-favorable
+- [x] Record measured reduction thresholds rather than treating cache-favorable
   old data as settled truth.
 
 ## Universal Or Per-Kernel?

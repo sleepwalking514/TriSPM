@@ -234,7 +234,7 @@ D2 validation results:
 - New row-resident opt-in:
   `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=true EXPECT_TIER_JSON=empty EXPECT_PROMOTION_SOURCE='LayerNorm x row'`
   passed.  The promotion sidecar records
-  `accepted_fill_on_first_pass_row_resident`; the tier sidecar remains `{}`.
+  `accepted_row_resident_fill_first`; the tier sidecar remains `{}`.
 - Both flags together:
   `TRITON_ENABLE_SPM_REDUCTIONS=1 TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1`
   still verifies as row-resident evidence with an empty tier sidecar, proving the
@@ -295,10 +295,11 @@ Only after D3 or later validation:
   reduction.
 - Consider row/block residency for producer results, not just memref arguments.
 
-### D3. Use A Conservative Profitability Gate Before Default Promotion
+### D3/P3. Use A Conservative Profitability Gate Before Default Promotion
 
-D3 status (2026-05-03): **active conservative opt-in policy/evidence gate; no
-default reduction promotion enabled**.
+D3/P3 status (2026-05-05): **closed conservative opt-in policy/evidence gate;
+P3 Softmax row-block evidence is accepted, but no default standalone reduction
+promotion is enabled**.
 
 First step:
 
@@ -314,10 +315,13 @@ Implemented in D3:
 - New explicit control:
   `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` /
   `enable-promotion-profitability`.
-- The model is deterministic and static.  It records `dma_descriptors`,
-  `mmio_stores`, `waits`, `fences`, `copy_bytes`,
-  `avoided_repeated_read_bytes`, `live_spm_bytes`, and `uses` in a
-  `profitability` object inside the existing D1 debug/evidence sidecar.
+- The model is deterministic and static.  It records
+  `model = phase35_p3_static_best_baseline_v1`,
+  `baseline = best_legal_cache_schedule`, `dma_descriptors`, `mmio_stores`,
+  `waits`, `fences`, `copy_bytes`, `spm_write_bytes`, `spm_read_bytes`,
+  `avoided_repeated_read_bytes`, `live_spm_bytes`, `estimated_extra_ops`,
+  `measured_bank_conflicts`, and `uses` in a `profitability` object inside the
+  existing D1 debug/evidence sidecar.
 - D3 keeps the sidecar as evidence only.  It is not read back by the compiler,
   planner, placement pass, launcher generation, `windowK` selection, or buffer
   layout.
@@ -325,11 +329,18 @@ Implemented in D3:
   `streaming_reduction_no_residency`: each chunk has one compute use and no
   bounded SPM lifetime.  The old `TRITON_ENABLE_SPM_REDUCTIONS=1` coverage path
   remains available when D3 profitability is off.
-- With D3 profitability enabled, streaming LayerNorm reductions are rejected.
-  The fill-on-first-pass row-resident LayerNorm path rejects small rows as
-  `insufficient_row_work` and accepts larger rows as opt-in evidence once the
-  DMA descriptor/wait overhead is removed from the model. Default LayerNorm
-  remains cache path unless explicitly requested.
+- With D3/P3 profitability enabled, streaming LayerNorm reductions are
+  rejected.  The fill-on-first-pass row-resident LayerNorm path rejects small
+  rows as `small_row_spm_overhead` and accepts larger rows as opt-in evidence
+  once the DMA descriptor/wait overhead is removed from the model. Default
+  LayerNorm remains cache path unless explicitly requested.
+- P3 rejects measured losing reduction variants with separate reasons:
+  `producer_store_spm_overhead` for producer-store row residency and
+  `chunk_dma_spm_overhead` for one-row chunk-DMA prefetch.
+- P3 accepts the measured Softmax row-block DMA path as
+  `accepted_block_resident_fill_first` against the best legal cache baseline.
+  The exp-cache optimization remains opt-in but is covered by the P3 preset and
+  compile-cache key.
 - Existing fused matmul promotion records get D3 accept evidence for the
   already-performing cases: B window as `accepted_reused_loop_window` and
   accumulator tile as `accepted_bounded_temporary`.
@@ -357,9 +368,13 @@ D3 validation results:
 - D2 row-resident opt-in still works when D3 profitability is off:
   `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=true EXPECT_TIER_JSON=empty EXPECT_PROMOTION_SOURCE='LayerNorm x row'`
   passed.
-- D3 rejects small row-resident LayerNorm:
-  `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=false EXPECT_TIER_JSON=empty EXPECT_REJECTION_REASON='insufficient_row_work'`
+- D3/P3 rejects small row-resident LayerNorm:
+  `make verify-layer_norm ENV='TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=false EXPECT_TIER_JSON=empty EXPECT_REJECTION_REASON='small_row_spm_overhead'`
   passed.
+- P3 accepts the Softmax row-block exp-cache preset as opt-in evidence:
+  `python3 scripts/run_experiment.py softmax --mode verify --preset phase35-p3-row-block-dma-exp-cache-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row block' --expect-promotion-reason accepted_block_resident_fill_first --expect-residency-plan 'Softmax x row block'`
+  passed with DMA/fence markers, an empty tier sidecar, and a promotion sidecar
+  reason of `accepted_block_resident_fill_first`.
 - D3 accepts the large fill-on-first-pass row-resident LayerNorm candidate as
   opt-in evidence:
   `python3 ./scripts/run_experiment.py layer_norm --mode verify --tag fill-row-d3-accept-512x1024 --set M=512 --set N=1024 --env TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS=1 --env TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 --env TRITON_SPM_PROMOTION_REPORT=1 --expect-spm true --expect-tier-json empty --expect-promotion-source 'LayerNorm x row'`
@@ -368,11 +383,11 @@ D3 validation results:
   `make verify-layer_norm ENV='TRITON_ENABLE_SPM_REDUCTIONS=1 TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1 TRITON_SPM_PROMOTION_REPORT=1' EXPECT_SPM=false EXPECT_TIER_JSON=empty EXPECT_REJECTION_REASON='streaming_reduction_no_residency'`
   passed.
 
-D3 conclusion:
+D3/P3 conclusion:
 
 - The compiler now has a conservative single-kernel promotion/rejection gate
-  that explains both accepted fused matmul evidence and rejected reduction
-  candidates.
+  that explains accepted fused matmul evidence, accepted Softmax row-block
+  evidence, and rejected reduction candidates.
 - No row/block-resident reduction path is default-enabled.  Reduction SPM
   remains explicit opt-in coverage or evidence only.
 - Gate A is not a final reduction-performance closure. Matmul has accepted
@@ -382,9 +397,10 @@ D3 conclusion:
 
 Only after this validation:
 
-- Fit constants from gem5 stats for descriptor/MMIO/fence overhead.
-- Use measured constants to tune thresholds.  Do not make the first version
-  profile-guided; keep it deterministic and conservative.
+- Expand the measured threshold table before changing default standalone
+  reduction policy.
+- Keep future threshold updates deterministic and conservative.  Do not make
+  the model profile-guided.
 
 ### D4. Delay Graph/Fusion Manifest Design Until One Fusion Exists
 
@@ -630,26 +646,27 @@ Steps:
    single-kernel rejection/coverage fixtures; it does not complete the
    profitability gate or row/block-resident promotion work.
 
-Gate A is complete only when the default policy is automatic for the single
-kernel set: matmul promotes, cache-only elementwise kernels stay clean, and
-LayerNorm/softmax promote only when the row/block-resident strategy is measured
-profitable.
+Gate A is complete for the current compiler-policy purpose when the default
+policy is conservative and explainable for the single-kernel set: matmul
+promotes, cache-only elementwise kernels stay clean, profitable Softmax
+row-block evidence is accepted only under explicit opt-in presets, and measured
+losing reduction schedules reject with clear reasons.
 
-As of the P2f cleanup, Gate A is structurally useful but not closed as a
-default reduction-performance policy.  Reductions remain cache path by default:
-Softmax now has a clean SPM-only row-block transform that beats stock canonical
-cache on adjacent shapes, and the exp-cache variant improves those row-block
-wins further. Chunk-DMA prefetch is weaker and harmful for LayerNorm, and
-LayerNorm/small-row cases still need conservative rejection. Refit D3 before
-automatic promotion so the default policy can explain both the accepted Softmax
-SPM-only transform and the still-rejected reduction cases.
+As of the Phase 3.5 P4 closeout, Gate A is closed as conservative admission
+control, not as automatic default reduction-performance enablement.  Reductions
+remain cache path by default.  Softmax has a clean SPM-only row-block transform
+that beats stock canonical cache on adjacent shapes, and the exp-cache variant
+improves those row-block wins further; P3 records this as
+`accepted_block_resident_fill_first` against the best legal cache baseline.
+Chunk-DMA prefetch is weaker and harmful for LayerNorm; producer-store and
+small-row LayerNorm also reject.  The gate is intentionally deterministic and
+evidence-only, not profile-guided.
 
-Phase 3.5 owns that next task.  See
-`phase3.5-single-kernel-convergence.md` for the concrete pass/code plan:
-generic reduction admission/lifetime/evidence, explicit buffer role and
-rotation modeling, LayerNorm overhead reduction, measured Softmax
-row-resident evidence, measured DMA-prefetch rejection evidence, and D3
-profitability refit.
+Future default promotion requires additional measured shape coverage and an
+explicit deterministic policy update.  The next implementation focus is Phase 4
+executable graph harness work; see
+`phase3.5-single-kernel-convergence.md` for the closed P4 record and
+`three-tier-placement.md` for the graph-placement boundary.
 
 ### Gate B: Multi-Kernel / Fusion Promotion
 

@@ -276,6 +276,7 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
         expect_spm and expect_tier_json == "non_empty",
     ))
     expect_promotion_source = verify_cfg.get("expect_promotion_source")
+    expect_promotion_reason = verify_cfg.get("expect_promotion_reason")
     expect_rejection_reason = verify_cfg.get("expect_rejection_reason")
     expect_rejection_source = verify_cfg.get("expect_rejection_source")
     expect_residency_plan = verify_cfg.get("expect_residency_plan")
@@ -359,6 +360,22 @@ def do_verify(kernel: str, tag: str, manifest: dict) -> None:
                 f"promotion source {expect_promotion_source!r}",
                 expect_promotion_source in sources,
                 json.dumps(sources, separators=(",", ":")),
+            )
+    if expect_promotion_reason:
+        promotion_json = spm_dir / f"{kernel}_promotions.json"
+        if not promotion_json.is_file():
+            check("promotion json exists", False, str(promotion_json))
+        else:
+            report = json.loads(promotion_json.read_text())
+            reasons = [
+                record.get("reason_code")
+                for record in report.get("promotions", [])
+                if record.get("status") == "accepted"
+            ]
+            check(
+                f"promotion reason {expect_promotion_reason!r}",
+                expect_promotion_reason in reasons,
+                json.dumps(reasons, separators=(",", ":")),
             )
     if expect_rejection_reason:
         promotion_json = spm_dir / f"{kernel}_promotions.json"
@@ -658,6 +675,8 @@ def main() -> None:
                    help="override verify DMA/fence marker expectation")
     p.add_argument("--expect-promotion-source", default=None,
                    help="require an accepted promotion source in the debug sidecar")
+    p.add_argument("--expect-promotion-reason", default=None,
+                   help="require an accepted promotion reason_code in the debug sidecar")
     p.add_argument("--expect-rejection-reason", default=None,
                    help="require a rejected promotion reason_code in the debug sidecar")
     p.add_argument("--expect-rejection-source", default=None,
@@ -690,6 +709,7 @@ def main() -> None:
         or args.expect_tier_json is not None
         or args.expect_dma is not None
         or args.expect_promotion_source is not None
+        or args.expect_promotion_reason is not None
         or args.expect_rejection_reason is not None
         or args.expect_rejection_source is not None
         or args.expect_residency_plan is not None
@@ -705,6 +725,8 @@ def main() -> None:
             verify_cfg["expect_dma"] = args.expect_dma == "true"
         if args.expect_promotion_source is not None:
             verify_cfg["expect_promotion_source"] = args.expect_promotion_source
+        if args.expect_promotion_reason is not None:
+            verify_cfg["expect_promotion_reason"] = args.expect_promotion_reason
         if args.expect_rejection_reason is not None:
             verify_cfg["expect_rejection_reason"] = args.expect_rejection_reason
         if args.expect_rejection_source is not None:

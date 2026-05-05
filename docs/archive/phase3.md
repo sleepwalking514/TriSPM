@@ -118,15 +118,17 @@ automatically:
   `SPM_ROW_GROUP_BLOCKS` is a low-sensitivity shape knob (`rg8` slightly best
   on 512-column rows, `rg16` slightly best on 128x1024).  Standalone Softmax
   remains opt-in evidence while reduction defaults stay conservative.
-- Explicit promotion D3 has landed as a conservative opt-in profitability gate.
-  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
+- Explicit promotion D3/P3 has landed as a conservative opt-in profitability
+  gate. `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1` records static
   descriptor/MMIO/wait/fence/byte/use evidence in the D1 sidecar, accepts the
-  existing fused matmul B-window / accumulator evidence, rejects streaming
-  reductions and small row-resident LayerNorm reductions, and can accept large
-  fill-on-first-pass row-resident evidence for opt-in experiments. Default
-  LayerNorm stays cache path until measured wins are clear. The sidecar remains
-  debug/evidence only; it is not read back by planning, placement, scheduling,
-  `windowK`, or buffer-layout code.
+  existing fused matmul B-window / accumulator evidence, accepts the measured
+  Softmax row-block DMA/exp-cache path as `accepted_block_resident_fill_first`,
+  rejects streaming reductions, producer-store, chunk-DMA, and small
+  row-resident LayerNorm reductions, and can accept large fill-on-first-pass
+  row-resident evidence for opt-in experiments. Default standalone reduction
+  SPM stays cache path until broader measured wins are clear. The sidecar
+  remains debug/evidence only; it is not read back by planning, placement,
+  scheduling, `windowK`, or buffer-layout code.
 - A no-regression issue found during D1 validation is fixed: DMA fences still
   lower to `fence iorw, iorw`, but no longer carry a generic inline-asm memory
   clobber. The clobber caused the 256x256x256 SPM matmul to regress from the
@@ -233,15 +235,17 @@ The MVP framework is landed. Current workload verification confirms:
   `LayerNorm x row` promotion sidecar while keeping the tier JSON empty. It is
   experiment evidence, not a default policy. The current fill-on-first-pass
   implementation removes DMA fences from this path; with
-  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1`, D3 still rejects small rows as
-  `insufficient_row_work` but accepts large rows as opt-in evidence.
+  `TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY=1`, D3/P3 still rejects small rows
+  as `small_row_spm_overhead` but accepts large rows as opt-in evidence.
   A producer-store P2a probe reaches near parity for 32x64 but regresses
   512x1024, so it is not the preferred LayerNorm schedule.
 - `softmax` row-resident promotion is now opt-in evidence instead of only a
   rejected plan. `phase35-row-resident-large-row` emits accepted `Softmax x
   row` promotion evidence and measured a 6.9% cycle win under flushed ROI.
-  Default Softmax still stays cache path until D3 admission is refit against a
-  best-cache baseline, not just same-schedule A/B.
+  The P3 refit now accepts the stronger Softmax row-block DMA/exp-cache path
+  against a best-cache baseline as opt-in evidence. Default Softmax still stays
+  cache path until a future default-policy update expands the measured shape
+  table and changes the deterministic gate deliberately.
   Forcing the old streaming reduction inputs to Tier 2 cacheable still leaves
   that path far slower than cache, so the default-off decision for streaming
   SPM is not just a Tier 3 uncacheable-buffer workaround.

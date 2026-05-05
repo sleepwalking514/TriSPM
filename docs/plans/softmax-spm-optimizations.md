@@ -1,7 +1,9 @@
 # Softmax SPM Optimizations
 
-> Status: active, 2026-05-05.
+> Status: implemented opt-in optimization, 2026-05-05.
 > Tracks compiler-pass optimizations for the Softmax row-block DMA SPM path.
+> Phase 3.5 P4 records this path as accepted opt-in evidence; default
+> standalone Softmax remains cache path until a later policy update.
 
 ## Baseline
 

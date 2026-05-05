@@ -15,9 +15,13 @@ SPM residency profitable.  The graph-level conservative placement MVP is also
 landed: intermediate activations default to cacheable Tier 2, selective external
 streaming weights may use Tier 3, and Tier 1/fusion remain later work.
 
-The active compiler gate is Phase 3.5: single-kernel reduction SPM policy
-convergence.  It no longer blocks the Phase 4 executable graph harness; it
-blocks only default reduction-SPM promotion decisions.
+Phase 3.5 is now closed through P4 as a conservative single-kernel reduction
+SPM policy gate.  It does not default-enable standalone reduction SPM; it
+records deterministic opt-in evidence, accepts the measured profitable Softmax
+row-block path, and rejects the measured losing reduction variants.  The
+current implementation focus can move to the Phase 4 executable graph harness
+using the conservative Tier 2 activation backbone and existing single-kernel
+defaults.
 The old streaming reduction SPM path is correctness/coverage only; it still
 loses badly because it emits many tiny DMA transactions.  The newer LayerNorm
 row-resident path is different: it uses CPU-direct SPM residency.  The first
@@ -35,7 +39,7 @@ full baseline showed:
   have no SPM markers and are effectively noise-level comparisons.
 - Opt-in LayerNorm CPU-direct row residency really uses SPM but still does not
   win: 32x64 is +13.6%, and 512x1024 is +0.5%.
-- D3 correctly rejects small LayerNorm rows as `insufficient_row_work`; it can
+- D3/P3 correctly rejects small LayerNorm rows as `small_row_spm_overhead`; it can
   accept large rows as opt-in evidence, but the measured result is still +0.3%,
   so reduction promotion is not default-enabled.
 - Softmax smoke and large-row runs are cache-path baselines only.  They have no
@@ -58,8 +62,9 @@ also measured; it reduces SPM reads but is slower for Softmax (`-0.6%`) and
 bad for large LayerNorm (`+17.6%`), so first-pass fill remains the better
 row-resident schedule.  LayerNorm still does not clear the default bar:
 first-pass large is near parity (`+0.5%`), producer-store small is near parity
-(`+0.3%`), but the large producer-store case regresses.  The P3 profitability
-refit is intentionally parked while the row-block DMA alternative is tested.
+(`+0.3%`), but the large producer-store case regresses.  This evidence is now
+folded into the P3 profitability gate: LayerNorm remains opt-in evidence only,
+not a default promotion.
 
 Phase 3.5 P2b measured the currently expressible DMA-prefetch variant.  It is
 opt-in via `TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS=dma_prefetch`: the producer
@@ -82,18 +87,28 @@ show `SPM_ROW_BLOCK=2` is the stable useful granularity, while
 `SPM_ROW_GROUP_BLOCKS` is a mild shape-sensitive overlap/amortization knob.
 `TRITON_SPM_SOFTMAX_CACHE_EXP=1` adds an opt-in exp-cache buffer for row-block
 Softmax and improves the measured row-block wins by about 20 percentage points
-on the current 64x512, 128x512, and 128x1024 shapes.  Standalone Softmax
-remains opt-in evidence while the default reduction policy stays conservative.
+on the current 64x512, 128x512, and 128x1024 shapes.  P3 now records this under
+`phase35_p3_static_best_baseline_v1`: Softmax row-block residency accepts as
+`accepted_block_resident_fill_first` against the best legal cache baseline,
+while small LayerNorm, producer-store, chunk-DMA, and streaming reductions keep
+clear rejection reasons.  Standalone Softmax remains opt-in evidence while the
+default reduction policy stays conservative.
+
+Phase 3.5 P4 closeout decision: do not keep expanding the admission heuristic
+inside Phase 3.5.  Treat it as a conservative guardrail, not as a profile-guided
+or self-discovering optimizer.  Future default-policy changes should add more
+measured shapes and update the deterministic gate deliberately; the near-term
+systems work moves to Phase 4 graph execution.
 
 ## Document Inventory
 
 | Status | File | What it is for |
 | --- | --- | --- |
-| Current | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | Active Phase 3.5 policy gate: close reduction-SPM admission, lifetime, row/block residency, and measured profitability before changing defaults. Phase 4 graph execution may proceed in parallel. |
+| Reference | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | Closed Phase 3.5 P4 record: conservative reduction-SPM admission, lifetime, row/block residency, and profitability evidence before any default-policy change. |
 | Current | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) | Three-tier placement design and MVP state: Tier 2/3 plumbing landed; graph-level conservative placement build/verify MVP landed; executable graph harness remains P0. |
-| Current | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) | Explicit promotion record: D1 evidence, D2 opt-in row-resident LayerNorm, and D3 conservative profitability/rejection policy are landed for current single-kernel coverage. |
+| Reference | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) | Explicit promotion record: D1 evidence, D2 opt-in row-resident LayerNorm, and D3/P3 conservative profitability/rejection policy are landed for current single-kernel coverage. |
 | Current | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | Follow-on fused micro-scheduler DMA reuse plan and first correctness implementation after SplitLargeContract exposed repeated B/A DMA costs. |
-| Current | [`plans/softmax-spm-optimizations.md`](plans/softmax-spm-optimizations.md) | Active Softmax row-block DMA optimization notes, including the implemented exp-cache path and future layout ideas. |
+| Reference | [`plans/softmax-spm-optimizations.md`](plans/softmax-spm-optimizations.md) | Softmax row-block DMA optimization notes, including the implemented exp-cache path and future layout ideas. |
 | Paper | [`论文要素积累/compiler-通用性论证.md`](论文要素积累/compiler-通用性论证.md) | Reusable paper/rebuttal wording for the compiler-generality argument around pattern matching versus kernel-specific templates. |
 | Roadmap | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) | Full Phase 1-6 compiler roadmap: foundation, Phase 3, attention/multi-kernel work, end-to-end inference, and evaluation. |
 | Evidence | [`evidence/l2_warming.md`](evidence/l2_warming.md) | Completed Tier 2 L2-warming evidence: source verification plus `dma_l2_warming` microbenchmark, 4K-32K sweep, and 2.8x speedup result. |
@@ -118,10 +133,10 @@ remains opt-in evidence while the default reduction policy stays conservative.
 | Past | Done | [`archive/phase3-compiler-backlog.md`](archive/phase3-compiler-backlog.md) P1 | GEMM extra-load matching, reduction multi-load matching, DMA lowering options, and GEMM/reduction bail-out cleanup are complete for the current coverage. |
 | Past | Done | [`archive/phase3.md`](archive/phase3.md) + [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6c | Transformer-facing single-kernel coverage landed for `activation`, `residual_add`, and `softmax`; each builds/verifies as cache path and has flushed ROI smoke compares. |
 | Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify: cacheable activation backbone, selective UC streaming inputs/weights, and explicit Tier 1/fusion non-goals. |
-| Current | Active prototype | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
-| Current | Active gate | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3 | Conservative profitability evidence landed: accepts existing fused matmul evidence, rejects streaming reductions and small row-resident reductions, and can accept large fill-on-first-pass row-resident evidence while default LayerNorm remains cache path. |
-| Current | Active compiler gate | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) | P2f/P2g are active: Softmax source is canonical, row-block/group DMA and exp-cache are SPM-only compiler transforms, and this gates default reduction-SPM policy rather than the Phase 4 executable graph harness. |
-| Next | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.2 | Start the executable cross-kernel graph harness with conservative Tier 2 activation backbone and existing single-kernel defaults; producer-consumer SPM promotion remains later. |
+| Past | Done | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
+| Past | Done | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3/P3 | Conservative profitability evidence landed: accepts fused matmul and Softmax row-block evidence, rejects streaming reductions, small row-resident reductions, producer-store, and chunk-DMA, while default standalone reduction SPM remains off. |
+| Past | Done | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) P4 | Phase 3.5 is closed as a conservative admission-control guardrail, not an automatic profiler or default-enablement claim. |
+| Current | Next implementation | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.2 | Build the executable cross-kernel graph harness with conservative Tier 2 activation backbone and existing single-kernel defaults; producer-consumer SPM promotion remains later. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists. Default `windowK=4` remains conservative; `windowK=auto`/autotune should be evidence-driven and queue-depth-aware. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |
@@ -156,15 +171,17 @@ remaining path component is the blocking/schedule.  When `--preset` is provided,
 the preset name prefixes the blocking/schedule component so opt-in SPM policy
 variants do not collide.
 
-Current Phase 3.5 Softmax commands:
+Phase 3.5 Softmax reference commands:
 
 ```bash
 cd workloads
 python3 scripts/run_experiment.py softmax --mode verify --preset canonical-spm-direct-large-row --expect-spm true --expect-tier-json empty --expect-dma false --expect-promotion-source 'Softmax x row' --expect-residency-plan 'Softmax x row'
 python3 scripts/run_experiment.py softmax --mode verify --preset phase35-row-block-dma-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row block' --expect-residency-plan 'Softmax x row block'
+python3 scripts/run_experiment.py softmax --mode verify --preset phase35-p3-row-block-dma-exp-cache-large-row --expect-spm true --expect-tier-json empty --expect-dma true --expect-promotion-source 'Softmax x row block' --expect-promotion-reason accepted_block_resident_fill_first --expect-residency-plan 'Softmax x row block'
 python3 scripts/run_experiment.py softmax --mode cache-search --sweep blocking --preset canonical-large-row
 python3 scripts/run_experiment.py softmax --mode spm-compare --preset canonical-spm-direct-large-row
 python3 scripts/run_experiment.py softmax --mode spm-compare --preset phase35-row-block-dma-large-row
+python3 scripts/run_experiment.py softmax --mode spm-compare --preset phase35-p3-row-block-dma-exp-cache-large-row
 python3 scripts/run_experiment.py softmax --mode spm-compare --sweep spm_blocking --preset phase35-row-block-dma-large-row
 ```
 
