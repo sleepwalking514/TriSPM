@@ -251,24 +251,35 @@ def compile_graph(graph_name: str, graph: dict[str, Any], plans: list[NodePlan],
     out_dir = graph_build_dir(graph_name, mode)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    plan_by_name = {plan.name: plan for plan in plans}
-    if "layer_norm" not in plan_by_name:
-        sys.exit("ERROR: executable graph harness requires a layer_norm node")
-    matmul_plans = [plan for plan in plans if plan.kernel == "matmul"]
-    if not matmul_plans:
-        sys.exit("ERROR: executable graph harness requires at least one matmul node")
-    matmul_plan = matmul_plans[0]
+    representative_by_kernel: dict[str, NodePlan] = {}
+    params_by_kernel: dict[str, dict[str, str]] = {}
+    for plan in plans:
+        if plan.kernel not in representative_by_kernel:
+            representative_by_kernel[plan.kernel] = plan
+            params_by_kernel[plan.kernel] = plan.params
+            continue
+        if plan.params != params_by_kernel[plan.kernel]:
+            first = representative_by_kernel[plan.kernel]
+            sys.exit(
+                "ERROR: executable graph currently links one symbol set per "
+                f"kernel, but {plan.kernel!r} has multiple parameter sets:\n"
+                f"  first node {first.name}: {params_by_kernel[plan.kernel]}\n"
+                f"  node {plan.name}: {plan.params}\n"
+                "Use a same-shape smoke graph or add namespaced AOT symbols "
+                "before mixing shapes for one kernel in a single ELF."
+            )
 
-    ln_dir = node_build_dir(plan_by_name["layer_norm"], mode)
-    mm_dir = node_build_dir(matmul_plan, mode)
-    required = [
-        ln_dir / "layer_norm.s",
-        ln_dir / "layer_norm_launcher.c",
-        ln_dir / "layer_norm_launcher.h",
-        mm_dir / "matmul.s",
-        mm_dir / "matmul_launcher.c",
-        mm_dir / "matmul_launcher.h",
-    ]
+    node_dirs = {
+        kernel: node_build_dir(plan, mode)
+        for kernel, plan in representative_by_kernel.items()
+    }
+    required: list[Path] = []
+    for kernel, build_dir in node_dirs.items():
+        required += [
+            build_dir / f"{kernel}.s",
+            build_dir / f"{kernel}_launcher.c",
+            build_dir / f"{kernel}_launcher.h",
+        ]
     missing = [path for path in required if not path.is_file()]
     if missing:
         detail = "\n".join(f"  {path}" for path in missing)
@@ -281,17 +292,26 @@ def compile_graph(graph_name: str, graph: dict[str, Any], plans: list[NodePlan],
 
     graph_cflags = render_graph_cflags(graph)
     binary = graph_binary_path(graph_name, mode)
+    include_flags = [
+        f"-I{node_dirs[kernel]}"
+        for kernel in sorted(node_dirs)
+    ]
+    asm_sources = [
+        str(node_dirs[kernel] / f"{kernel}.s")
+        for kernel in sorted(node_dirs)
+    ]
+    launcher_sources = [
+        str(node_dirs[kernel] / f"{kernel}_launcher.c")
+        for kernel in sorted(node_dirs)
+    ]
     cmd = [
         env["CLANG"],
         *shlex.split(env["CLANG_FLAGS"]),
         *shlex.split(graph_cflags),
-        f"-I{ln_dir}",
-        f"-I{mm_dir}",
+        *include_flags,
         f"-I{env['TRISPM_ROOT']}/simulator/src/scratchpad_mem",
-        str(ln_dir / "layer_norm.s"),
-        str(mm_dir / "matmul.s"),
-        str(ln_dir / "layer_norm_launcher.c"),
-        str(mm_dir / "matmul_launcher.c"),
+        *asm_sources,
+        *launcher_sources,
         str(harness_source),
         "-lm",
         "-o",

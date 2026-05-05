@@ -18,6 +18,7 @@
 #   make build-graph-exec GRAPH=layer_norm_qkv
 #   make run-graph GRAPH=layer_norm_qkv
 #   make cmp-graph GRAPH=layer_norm_qkv
+#   make eval-graph GRAPH=attention_smoke
 #   make verify                   verify all kernels (continues past failures)
 #   make sweep-matmul SWEEP=size [PRESET=steady] [SET="CHECK_RESULT=0"]
 #
@@ -59,6 +60,7 @@ EXPECT_RESIDENCY_PLAN ?=
 
 DRIVER := python3 ./scripts/run_experiment.py
 GRAPH_DRIVER := python3 ./scripts/graph_placement.py
+GRAPH_EVAL_DRIVER := python3 ./scripts/phase6_graph_eval.py
 
 # Translate make-vars to driver flags.
 PRESET_FLAG := $(if $(PRESET),--preset $(PRESET),)
@@ -80,7 +82,7 @@ CACHE_SEARCH_TARGETS := $(addprefix cache-search-,$(KERNELS))
 SWEEP_TARGETS  := $(addprefix sweep-,$(KERNELS))
 VERIFY_TARGETS := $(addprefix verify-,$(KERNELS))
 
-.PHONY: all clean verify plan-graph build-graph verify-graph build-graph-exec run-graph cmp-graph $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(CACHE_SEARCH_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
+.PHONY: all clean verify plan-graph build-graph verify-graph build-graph-exec run-graph cmp-graph eval-graph $(BUILD_TARGETS) $(RUN_TARGETS) $(CMP_TARGETS) $(CACHE_SEARCH_TARGETS) $(SWEEP_TARGETS) $(VERIFY_TARGETS)
 
 all: $(BUILD_TARGETS)
 
@@ -126,6 +128,9 @@ run-graph:
 
 cmp-graph:
 	@$(GRAPH_DRIVER) $(GRAPH) --mode compare $(SKIP_BUILD_FLAG) $(foreach flag,$(GEM5_FLAG),--gem5-flag=$(flag))
+
+eval-graph:
+	@$(GRAPH_EVAL_DRIVER) $(GRAPH) $(SKIP_BUILD_FLAG) $(foreach flag,$(GEM5_FLAG),--gem5-flag=$(flag))
 
 # Verify all kernels (continues past individual failures, reports at end).
 verify:

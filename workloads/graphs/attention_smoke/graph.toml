@@ -1,0 +1,218 @@
+[graph]
+name = "attention_smoke"
+description = "Small attention-facing graph smoke: layer_norm -> q/k/v -> qk -> softmax -> pv -> residual_add -> activation."
+
+[harness]
+source = "harness.c"
+
+[harness.params]
+DIM = 32
+BLOCK = 32
+CHECK_RESULT = 1
+FLUSH_BEFORE_ROI = 1
+
+[harness.build]
+c_macros = [
+    "GRAPH_DIM={DIM}",
+    "GRAPH_BLOCK={BLOCK}",
+    "GRAPH_CHECK_RESULT={CHECK_RESULT}",
+    "GRAPH_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+]
+
+[tensors.x]
+kind = "external_input"
+read_only = true
+dma_only = false
+note = "LayerNorm input stays cacheable because the reduction path defaults to cache."
+
+[tensors.gamma]
+kind = "external_weight"
+read_only = true
+dma_only = false
+note = "LayerNorm scale has reduction/scalar-style access; keep cacheable."
+
+[tensors.beta]
+kind = "external_weight"
+read_only = true
+dma_only = false
+note = "LayerNorm bias has reduction/scalar-style access; keep cacheable."
+
+[tensors.ln_out]
+kind = "intermediate"
+producer = "layer_norm"
+consumers = ["q_proj", "k_proj", "v_proj"]
+
+[tensors.wq]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.wk]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.wv]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.q]
+kind = "intermediate"
+producer = "q_proj"
+consumers = ["qk"]
+
+[tensors.k]
+kind = "intermediate"
+producer = "k_proj"
+consumers = ["qk"]
+note = "Smoke fixture uses square DIM so qk can reuse the existing matmul symbol without a transpose kernel."
+
+[tensors.v]
+kind = "intermediate"
+producer = "v_proj"
+consumers = ["pv"]
+
+[tensors.scores]
+kind = "intermediate"
+producer = "qk"
+consumers = ["softmax"]
+
+[tensors.probs]
+kind = "intermediate"
+producer = "softmax"
+consumers = ["pv"]
+
+[tensors.attn]
+kind = "intermediate"
+producer = "pv"
+consumers = ["residual_add"]
+
+[tensors.residual]
+kind = "external_input"
+read_only = true
+dma_only = false
+
+[tensors.resid_out]
+kind = "intermediate"
+producer = "residual_add"
+consumers = ["activation"]
+
+[tensors.act_out]
+kind = "graph_output"
+producer = "activation"
+
+[nodes.layer_norm]
+kernel = "layer_norm"
+args = ["x", "gamma", "beta", "ln_out"]
+tag = "graph/attention_smoke/layer_norm"
+
+[nodes.layer_norm.params]
+M = 32
+N = 32
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+
+[nodes.q_proj]
+kernel = "matmul"
+args = ["ln_out", "wq", "q"]
+tag = "graph/attention_smoke/q_proj"
+
+[nodes.q_proj.params]
+M = 32
+N = 32
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.k_proj]
+kernel = "matmul"
+args = ["ln_out", "wk", "k"]
+tag = "graph/attention_smoke/k_proj"
+
+[nodes.k_proj.params]
+M = 32
+N = 32
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.v_proj]
+kernel = "matmul"
+args = ["ln_out", "wv", "v"]
+tag = "graph/attention_smoke/v_proj"
+
+[nodes.v_proj.params]
+M = 32
+N = 32
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.qk]
+kernel = "matmul"
+args = ["q", "k", "scores"]
+tag = "graph/attention_smoke/qk"
+
+[nodes.qk.params]
+M = 32
+N = 32
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.softmax]
+kernel = "softmax"
+args = ["scores", "probs"]
+tag = "graph/attention_smoke/softmax"
+
+[nodes.softmax.params]
+M = 32
+N = 32
+BLOCK_N = 32
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+CHECK_RESULT = 0
+
+[nodes.pv]
+kernel = "matmul"
+args = ["probs", "v", "attn"]
+tag = "graph/attention_smoke/pv"
+
+[nodes.pv.params]
+M = 32
+N = 32
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.residual_add]
+kernel = "residual_add"
+args = ["attn", "residual", "resid_out"]
+tag = "graph/attention_smoke/residual_add"
+
+[nodes.residual_add.params]
+SIZE = 1024
+BLOCK_SIZE = 32
+CHECK_RESULT = 0
+
+[nodes.activation]
+kernel = "activation"
+args = ["resid_out", "act_out"]
+tag = "graph/attention_smoke/activation"
+
+[nodes.activation.params]
+SIZE = 1024
+BLOCK_SIZE = 32
+CHECK_RESULT = 0

@@ -127,6 +127,14 @@ def graph_report_path(graph: str) -> Path:
     return graph_m5out_dir(graph, "spm") / "graph_report.txt"
 
 
+def graph_eval_json_path(graph: str) -> Path:
+    return graph_m5out_dir(graph, "spm") / "phase6_eval.json"
+
+
+def graph_eval_summary_path(graph: str) -> Path:
+    return graph_m5out_dir(graph, "spm") / "phase6_summary.txt"
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -149,6 +157,8 @@ def main() -> None:
             "graph_compare",
             "graph_spm_stats",
             "graph_report",
+            "graph_eval_json",
+            "graph_eval_summary",
         ],
     )
     p.add_argument("kernel")
@@ -175,11 +185,15 @@ def main() -> None:
         "graph_compare",
         "graph_spm_stats",
         "graph_report",
+        "graph_eval_json",
+        "graph_eval_summary",
     ):
         fns = {
             "graph_compare": graph_compare_path,
             "graph_spm_stats": graph_spm_stats_path,
             "graph_report": graph_report_path,
+            "graph_eval_json": graph_eval_json_path,
+            "graph_eval_summary": graph_eval_summary_path,
         }
         print(fns[args.what](args.kernel))
     elif args.what.startswith("graph_"):

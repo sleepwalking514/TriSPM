@@ -572,9 +572,11 @@ The three-tier placement policy is the paper's most valuable insight. The Tier 2
   `workloads/scripts/graph_placement.py` reads graph tensor-edge metadata,
   forces intermediate activations and producer outputs to Tier 2, and reserves
   Tier 3 for external read-only DMA-only tensors.  The first executable
-  `layer_norm -> q/k/v` graph harness and graph-vs-cache report mode are now in
-  place; the remaining work is to extend this to attention-facing graph shapes
-  and fold the graph reports into Phase 6 aggregation.
+  `layer_norm -> q/k/v` graph harness, the attention-facing `attention_smoke`
+  harness, graph-vs-cache report mode, and Phase 6 graph-eval JSON/summary
+  artifacts are now in place.  The remaining work is to extend beyond the
+  square smoke shape to realistic QK/PV layouts and fold graph eval JSON files
+  into final aggregation/plot scripts.
 - Use the completed L2-warming evidence as the mechanism proof: after DMA reads from cacheable DRAM, L2 holds data copies.
 - Compare Tier 2 vs pure cache on real kernels: prove "cacheable + DMA tiling" is never worse than cache (performance floor guarantee).
 
@@ -703,7 +705,7 @@ Phase 1 (AOT cross-compile) ✅ COMPLETE
               │     └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
                     ├─ 6a Cache baseline [Phase 3 matmul/layer_norm baseline ready]
-                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + first executable graph smoke/reporting done; Phase 6 aggregation pending]
+                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + qkv/attention graph smoke + graph eval JSON done; final aggregation pending]
                     ├─ 6c Additional workloads [after Phase 3.5/4 pattern support]
                     ├─ 6d Breakdown analysis [built on 6a data]
                     ├─ 6e Area comparison [independent, can start anytime]

@@ -23,7 +23,11 @@ current implementation focus has moved to Phase 4 graph execution.  The first
 `layer_norm -> q/k/v` executable graph harness is landed: it links shared
 LayerNorm and matmul AOT artifacts into one ELF, allocates graph tensors once,
 keeps the activation backbone Tier 2, passes SPM/cache gem5 smoke checks, and
-now emits graph-vs-cache reports from the shared graph manifest.
+now emits graph-vs-cache reports from the shared graph manifest.  A second
+`attention_smoke` graph now exercises the attention-facing sequence
+`layer_norm -> q/k/v -> qk -> softmax -> pv -> residual_add -> activation` at a
+small square smoke shape, and Phase 6 graph-eval artifacts can be generated
+directly from either graph manifest.
 The old streaming reduction SPM path is correctness/coverage only; it still
 loses badly because it emits many tiny DMA transactions.  The newer LayerNorm
 row-resident path is different: it uses CPU-direct SPM residency.  The first
@@ -134,11 +138,11 @@ systems work moves to Phase 4 graph execution.
 | Past | Done | [`evidence/l2_warming.md`](evidence/l2_warming.md) | Tier 2 L2-warming claim has source-level and microbenchmark evidence. |
 | Past | Done | [`archive/phase3-compiler-backlog.md`](archive/phase3-compiler-backlog.md) P1 | GEMM extra-load matching, reduction multi-load matching, DMA lowering options, and GEMM/reduction bail-out cleanup are complete for the current coverage. |
 | Past | Done | [`archive/phase3.md`](archive/phase3.md) + [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6c | Transformer-facing single-kernel coverage landed for `activation`, `residual_add`, and `softmax`; each builds/verifies as cache path and has flushed ROI smoke compares. |
-| Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify, first executable `layer_norm -> q/k/v` gem5 smoke, and graph-vs-cache reporting: cacheable activation backbone, selective UC streaming weights, and explicit Tier 1/fusion non-goals. |
+| Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify, executable `layer_norm -> q/k/v` and `attention_smoke` gem5 smokes, graph-vs-cache reporting, and Phase 6 graph-eval summaries: cacheable activation backbone, selective UC streaming weights, and explicit Tier 1/fusion non-goals. |
 | Past | Done | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
 | Past | Done | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3/P3 | Conservative profitability evidence landed: accepts fused matmul and Softmax row-block evidence, rejects streaming reductions, small row-resident reductions, producer-store, and chunk-DMA, while default standalone reduction SPM remains off. |
 | Past | Done | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) P4 | Phase 3.5 is closed as a conservative admission-control guardrail, not an automatic profiler or default-enablement claim. |
-| Current | Next implementation | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.2 | Extend the executable graph harness toward attention-facing schedules and feed graph placement metadata into Phase 6 reporting; producer-consumer SPM promotion remains later. |
+| Current | Next implementation | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.2 | Extend attention-facing graph fixtures beyond the current square smoke shape toward realistic QK/PV layouts; producer-consumer SPM promotion remains later. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists. Default `windowK=4` remains conservative; `windowK=auto`/autotune should be evidence-driven and queue-depth-aware. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |
@@ -166,11 +170,15 @@ Graph-level compare uses the graph manifest directly:
 ```bash
 cd workloads
 python3 scripts/graph_placement.py layer_norm_qkv --mode compare
+python3 scripts/phase6_graph_eval.py attention_smoke
 ```
 
-This builds and runs both SPM and cache graph ELFs, checks both result gates,
-then writes `compare_vs_cache.txt`, `spm_stats.txt`, and `graph_report.txt`
-under `m5out/graphs/layer_norm_qkv/spm/default/`.
+`graph_placement.py --mode compare` builds and runs both SPM and cache graph
+ELFs, checks both result gates, then writes `compare_vs_cache.txt`,
+`spm_stats.txt`, and `graph_report.txt` under
+`m5out/graphs/<graph>/spm/default/`.  `phase6_graph_eval.py` runs the same
+compare path and also writes `phase6_eval.json` plus `phase6_summary.txt` for
+paper-evaluation aggregation.
 
 Each kernel's `experiment.toml` has a base `[params]` block plus named
 `[presets.<name>]` blocks.  `--preset <name>` starts from `[params]`, overlays
