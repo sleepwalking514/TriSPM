@@ -99,7 +99,79 @@ store finalAcc to C
 descriptor 会触发 queue full，并且当前实现会 drop descriptor。因此第一版以
 4 个 BK tile 为窗口，和硬件队列深度匹配。
 
-后续可以把 windowK 变成 pass option 或从 DMA engine 参数传入。
+`windowK` 已作为 pass option 暴露。短期默认仍应保持 `windowK=4`，把更大
+window 当作显式实验/自动调参候选，而不是无条件默认。
+
+### WindowK 自动选择与 autotune 设计（2026-05-05）
+
+最新 256x256x256 / 32x32x32 sweep 说明：更大的 `windowK` 能减少 wait stall，
+但不保证减少总 cycles。
+
+| Case | cycles | wait stall | non-wait cycles | DMA busy | wait overlap | queue full |
+|---|---:|---:|---:|---:|---:|---:|
+| sync wk4 | 1,729,209 | 487,634 | 1,241,575 | 544,193 | 10.4% | 0 |
+| overlap wk4 | 1,551,812 | 255,204 | 1,296,608 | 547,181 | 53.4% | 0 |
+| overlap wk8 + queue8 | 1,634,349 | 225,832 | 1,408,517 | 548,001 | 58.8% | 0 |
+
+结论：
+
+- `windowK=8` 的 wait stall 更低，但总 cycles 比 overlap wk4 高约 5.3%。
+- wk4/wk8 的 DMA transfers 和 DMA bytes 相同；当前 schedule 下增大
+  `windowK` 主要减少 B-window waits 和 accumulator spill/reload 次数，不减少
+  A micro DMA 数量。
+- 这次退化不应简单归因于 branch predictor；branch lookup/mispredict 并未变差。
+  更可信的解释是更长 inner K-loop 改变了代码形状、寄存器生命周期和 O3 后端
+  压力，抵消了 wait stall 收益。
+- 因此默认策略必须保守，autotune 证据优先于手写直觉。
+
+短期 compiler policy：
+
+```text
+default:
+  microM = 8
+  windowK = 4
+
+windowK=auto:
+  candidates = {4}
+  if dmaQueueDepth >= 8 and SPM fits B-window/A-double-buffer/acc:
+    add 8 only when trips = K/BK is large enough to amortize non-wait overhead
+  keep windowK <= dmaQueueDepth
+  reject 16+ unless an explicit experiment enables it
+```
+
+`dmaQueueDepth` must become compiler-visible, e.g.
+`TRITON_SPM_DMA_QUEUE_DEPTH`, and gem5 must receive the matching
+`--dma_max_descriptors` value. A compiler-selected `windowK` larger than the
+simulator queue depth is invalid because the current DMA engine rejects/drops
+descriptors when the queue is full.
+
+Promotion/debug sidecars should record the decision:
+
+```json
+{
+  "chosen_windowK": 4,
+  "candidate_windowK": [4, 8],
+  "dma_queue_depth": 4,
+  "reason": "conservative default; wk8 reduced wait stall but increased total cycles on the current 256^3 evidence"
+}
+```
+
+Medium-term autotune mode:
+
+- Compile candidate schedules for `microM in {4,8,16}` and
+  `windowK in {2,4,8,16}` subject to SPM capacity and queue-depth constraints.
+- Run short gem5 sweeps before full 1024^3 runs. Prefer K-only sweeps such as
+  `M=N=256, K=256/512/1024` to test whether larger `trips = K/BK` changes the
+  windowK crossover.
+- Cache results by `(M,N,K,BM,BN,BK,microM,windowK,dmaQueueDepth,SPM size,CPU
+  config)`.
+- Normal builds use deterministic static policy; paper/perf builds may use the
+  autotune cache.
+
+B-window double buffering is not the next default optimization while `dma_wait`
+waits for global DMA idle. Without per-descriptor/token waits or separate DMA
+channels, prefetching next-window B can delay A waits and turn intended overlap
+back into serialization.
 
 ### SPM 空间估算
 
@@ -192,8 +264,11 @@ descriptor 会触发 queue full，并且当前实现会 drop descriptor。因此
 
 ## 后续优化
 
-- `windowK` 自动调参：根据 SPM 容量和 DMA queue depth 选择 2/4/8
-- B window 内部可继续做 double-buffer/pipeline
+- `windowK=auto`：先按上述保守规则和 autotune cache 设计实现；默认仍为 4。
+- DMA queue depth 配置贯通：compiler env、run script、gem5
+  `max_descriptors` 必须一致。
+- B window 内部 double-buffer/pipeline 推迟到 per-descriptor/token wait 或
+  多 DMA channel 设计后再做默认路径。
 - A micro DMA 可按 rows 合并或用专门的 2D descriptor 优化 MMIO 开销
 - A micro pipelining 需要轻量实现。一次性把 window 内所有 A micro tile
   stage 到 SPM 的实验版本 64³ 正确，但 512³ 明显变慢，说明额外 loop/control

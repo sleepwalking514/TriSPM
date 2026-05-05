@@ -1,6 +1,6 @@
 # Three-Tier Data Placement — Plan & Discussion (P0+ #8)
 
-> 对应 `phase3-compiler-backlog.md` §B.3c / §E P0+ #8 / §E P1 #9。
+> 对应 `../archive/phase3-compiler-backlog.md` §B.3c / §E P0+ #8 / §E P1 #9。
 > Phase 3 论文核心论点 "SPM never worse than cache" 的实现支撑。
 
 ---
@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | SPM | 片上 SRAM | 旁路 cache，CPU 通过 spm_port 直访 | `spm_malloc` | `0x40000000`，256 KiB |
 | Cacheable DRAM | DRAM | 走 L1/L2 cache | `malloc` | `0x80000000+`（系统堆） |
-| Uncacheable DMA buf | DRAM | gem5 routing 标记为 uncacheable | `dma_buf_malloc` | `0x30000000`，1 MiB |
+| Uncacheable DMA buf | DRAM | gem5 routing 标记为 uncacheable | `dma_buf_malloc` | `0x20000000`，512 MiB |
 
 `dma_buf_malloc` **不是** "走 SPM 必经的 staging"，而是 DRAM 的一段特殊区域。三个空间互不重叠。
 
@@ -186,7 +186,7 @@
 ### 3.5 stats / 验证
 
 - 验证手段（按用户要求）：**只看 IR**，不跑 gem5。
-  - `<kernel>.llir` 中：Tier 3 张量地址应在 `0x30000000+` 区域；Tier 2 在 heap 区。
+  - `<kernel>.llir` 中：Tier 3 张量地址应在 `0x20000000+` 区域；Tier 2 在 heap 区。
   - `<kernel>_tiers.json` 内容正确。
   - `<kernel>_launcher.c` 含 `<kernel>_alloc` 派发逻辑。
   - harness binary `objdump` 能找到对 `dma_buf_malloc` 的调用。
@@ -375,5 +375,5 @@ Next work:
 - 触发条件：当未来引入需要更宽语义的 workload 时再加，避免过早泛化。
 
 ### 6.4 验证补完
-- `make verify-spm-policy` 引入 tier 检查（phase3-compiler-backlog.md §E P2 #14 的延伸）— 已由 `make verify` / `make verify-<kernel>` 覆盖。
+- `make verify-spm-policy` 引入 tier 检查（`../archive/phase3-compiler-backlog.md` §E P2 #14 的延伸）— 已由 `make verify` / `make verify-<kernel>` 覆盖。
 - L2-warming 实验数据点：tier 2 vs cache baseline，要求新写 long-vector + scalar-tail workload — 已由 `../evidence/l2_warming.md` 的 `dma_l2_warming` microbenchmark 覆盖。

@@ -1,14 +1,17 @@
 # Phase 3.5 Single-Kernel SPM Convergence Plan
 
-> Status: active plan, 2026-05-03.
+> Status: active plan, updated 2026-05-05.
 > This phase exists because the LayerNorm re-audit showed that reduction SPM
-> was not fundamentally settled.  Phase 4 graph/fusion work should wait until
-> the single-kernel reduction story has a measured, reuse-aware baseline.
+> was not fundamentally settled.  As of 2026-05-05, this phase should gate
+> default reduction-SPM policy, not block the Phase 4 executable graph harness
+> or conservative cross-kernel placement work.
 
 ## Goal
 
-Phase 3.5 closes the single-kernel SPM performance policy before graph-level
-Phase 4/5 work.  The target is not "make every kernel use SPM"; it is:
+Phase 3.5 closes the single-kernel SPM performance policy before making new
+default SPM-promotion decisions.  It should run in parallel with Phase 4 graph
+execution once conservative cross-kernel backing placement is available.  The
+target is not "make every kernel use SPM"; it is:
 
 - `matmul` remains the mature SPM path.
 - Low-reuse elementwise kernels stay cache path unless fused.
@@ -30,6 +33,31 @@ Softmax has an extra admission caveat.  The current smoke workload keeps
 is useful coverage, but it is not enough evidence for SPM row/block residency.
 Phase 3.5 must add a larger multi-block row shape before judging Softmax
 promotion profitable.
+
+## Phase 4 Handoff Boundary
+
+Do not tune every single-kernel knob to local optimum before starting Phase 4.
+The project goal is an executable transformer-facing pipeline, and graph-level
+behavior can change the value of single-kernel choices.
+
+Safe to start Phase 4 now:
+
+- `matmul` has a mature SPM path and a conservative default.
+- `activation`, `residual_add`, `layer_norm`, and default `softmax` have
+  cache-path correctness coverage.
+- Graph-level placement MVP already keeps intermediate activations cacheable
+  Tier 2 and reserves Tier 3 for external read-only streaming inputs/weights.
+
+Still owned by Phase 3.5 while Phase 4 proceeds:
+
+- Do not turn reduction SPM on by default until D3 is refit against best legal
+  cache baselines and measured thresholds.
+- Keep `windowK`/`microM` tuning deterministic and conservative by default.
+  Autotune/sweep evidence may improve perf builds, but should not be required
+  for graph correctness.
+- Treat B-window double-buffering and cross-window DMA overlap as future work
+  until the wait semantics support per-descriptor/token waits or another way to
+  avoid delaying A-micro waits.
 
 ## Lessons To Borrow From Triton GPU
 
@@ -591,10 +619,13 @@ Tasks:
 - Do not make streaming DMA reduction default unless it beats the resident
   plan; it is now a fallback/debug path.
 
-P2b/P2c result: chunk-DMA was measured and rejected as too descriptor-heavy.
-True Softmax row-block A/B DMA now builds, verifies, and wins after P2c
-granularity tuning: the old 16 KiB row-block cut exposed too much wait, while
-the current 8 KiB row-block cut with a longer row-block group beats cache.
+P2b/P2f/P2g result: chunk-DMA was measured and rejected as too
+descriptor-heavy. True Softmax row-block A/B DMA now builds, verifies, and
+wins against the stock canonical cache baseline after the P2f cleanup: the
+cache path stays canonical, while row-block/grouping is an SPM-only compiler
+transform. The P2g exp-cache variant then removes redundant
+`exp(x - max)` recomputation in normalize/store and improves the current
+row-block wins further.
 
 This is a different idea from the old streaming reduction DMA path.  The old
 path DMAed tiny per-loop chunks and paid descriptor/MMIO/wait overhead for each
@@ -642,10 +673,41 @@ Exit criteria:
   fill-on-first-pass wins (`-6.9%`), producer-store is weaker (`-0.6%`).
 - Row-block DMA double buffering has a buildable prototype or a documented
   rejection with measured descriptor/wait overhead and SPM-capacity math.
-  P2b built and measured the chunk-DMA prefetch variant; P2c now builds and
-  measures the true Softmax row-block A/B DMA variant.  P2d downgrades this to
-  same-schedule evidence only: the row-block lowering is real, but the
-  performance policy must be re-evaluated against the best legal cache schedule.
+  P2b built and measured the chunk-DMA prefetch variant; P2f establishes the
+  true Softmax row-block A/B DMA variant against a stock canonical cache
+  baseline, and P2g adds the opt-in exp-cache improvement.  The remaining work
+  is not basic row-block correctness; it is the P3 policy refit that decides
+  when this SPM-only transform becomes a default reduction promotion.
+
+### 2026-05-05 P2g Softmax Exp-Cache Optimization
+
+Landed as an opt-in row-block DMA optimization:
+
+- `TRITON_SPM_SOFTMAX_CACHE_EXP=1` allocates a third SPM buffer for
+  `exp(x - max)` values during the exp/sum pass.
+- The normalize/store pass reads the cached exp values from SPM instead of
+  rereading `x`, subtracting max, and recomputing exp.
+- The implementation lives in `ConvertMemoryToSPM.cpp` inside the row-block
+  Softmax lowering (`cloneLoopBodyWithRowBlockSpm` and
+  `lowerSoftmaxRowBlockGroupDma`).
+- This remains an SPM-only transform. The cache baseline stays the canonical
+  Triton CPU softmax schedule.
+
+Measured result vs stock canonical cache baseline:
+
+| Shape | Row-block DMA only | Row-block DMA + exp-cache | Improvement |
+|---|---:|---:|---:|
+| 64x512 | -37.8% | -58.0% | +20.2pp |
+| 128x512 | -37.6% | -58.1% | +20.5pp |
+| 128x1024 | -42.8% | -62.8% | +20.0pp |
+
+Policy implication:
+
+- Softmax now has strong SPM-only row-block evidence, but default reduction
+  promotion still needs the P3 profitability refit so the compiler can accept
+  this case while continuing to reject LayerNorm and small-row reductions.
+- Keep exp-cache under an explicit env flag until the refit records it as part
+  of an accepted Softmax policy.
 
 ### P3. Profitability Gate Refit
 
@@ -684,15 +746,16 @@ Exit criteria:
 Files:
 
 - `docs/README.md`
-- `docs/plans/phase3.md`
+- `docs/archive/phase3.md`
 - `docs/plans/spm-explicit-promotion.md`
 - `docs/plans/three-tier-placement.md`
 - `docs/plans/compiler-roadmap.md`
 
 Tasks:
 
-- Keep Phase 4 graph/fusion as next major topic only after Phase 3.5 reaches
-  its reduction exit criteria.
+- Allow the Phase 4 executable graph harness to start now using the conservative
+  Tier 2 activation backbone and existing single-kernel defaults.
+- Keep Phase 3.5 as the gate for changing default reduction-SPM policy.
 - Document that Tier 2 is the cross-kernel default, while SPM residency is
   single-kernel or fused-region scoped unless Tier 1 is explicitly implemented.
 - Record measured reduction thresholds rather than treating cache-favorable

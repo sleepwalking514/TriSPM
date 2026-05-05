@@ -1,5 +1,12 @@
 # Phase 3 Compiler Backlog
 
+> **Status: ARCHIVED RESULT — 2026-05-05**
+> Phase 3 compiler robustness is closed for the current coverage. Remaining
+> work such as output-tile SPM writeback, executable graphs, and reduction
+> default policy now lives in [`../plans/compiler-roadmap.md`](../plans/compiler-roadmap.md),
+> [`../plans/three-tier-placement.md`](../plans/three-tier-placement.md), and
+> [`../plans/phase3.5-single-kernel-convergence.md`](../plans/phase3.5-single-kernel-convergence.md).
+
 > Audit performed against `~/.claude/plans/moonlit-napping-origami.md` ("Phase 3 — SPM Transformation Pass") and the existing repo state.
 
 ---
@@ -57,7 +64,7 @@ active backlog.
 1. ~~**No real compute/DMA overlap.**~~ Resolved by P0 #3. The GEMM path now
    prefetches before `read_current` / compute and waits at the end of the
    iteration; measured overlap is recorded in
-   `../archive/matmul-spm-lowering-closure.md`.
+   `matmul-spm-lowering-closure.md`.
 2. **No SPM writeback for output tile.** Phase 3 plan keeps writeback in §4b, but the GEMM pass should at least leave a hook (or stop transforming when the output is also SPM-resident). Today the C tile still goes through cacheable `vector.transfer_write`.
 3. ~~**MVP gating leaves all current workloads untransformed.**~~ Resolved for
    `matmul`; `vector_add` is intentionally not transformed, and `layer_norm`

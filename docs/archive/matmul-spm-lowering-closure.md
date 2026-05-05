@@ -4,9 +4,10 @@
 > This file records the completed Phase 3 matmul SPM lowering work:
 > codegen-shape recovery, fair cold-cache measurement, MMIO descriptor
 > compaction, size/steady sweeps, and the final cold-start headline.
-> Current Phase 3 status now lives in
-> [`../plans/phase3.md`](../plans/phase3.md), and future ordering lives in
-> [`../plans/phase3-execution-timeline.md`](../plans/phase3-execution-timeline.md).
+> The Phase 3 status and execution timeline are now archived in
+> [`phase3.md`](phase3.md) and
+> [`phase3-execution-timeline.md`](phase3-execution-timeline.md). Current
+> planning lives under `../plans/`.
 >
 > Keep this as the measured result log. It is no longer the active task list.
 

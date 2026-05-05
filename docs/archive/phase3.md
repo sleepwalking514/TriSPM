@@ -1,8 +1,15 @@
 # TriSPM Compiler — Phase 3 Current Status
 
+> **Status: ARCHIVED RESULT — 2026-05-05**
+> Phase 3 matmul, placement plumbing, transformer-facing smoke coverage, and
+> compiler robustness are closed for the current scope. Current execution now
+> lives in [`../plans/phase3.5-single-kernel-convergence.md`](../plans/phase3.5-single-kernel-convergence.md),
+> [`../plans/three-tier-placement.md`](../plans/three-tier-placement.md), and
+> [`../plans/compiler-roadmap.md`](../plans/compiler-roadmap.md).
+
 This file is the Phase 3 status page. The older "how to add
 `ConvertMemoryToSPM`" checklist is now superseded by `phase3-compiler-backlog.md`,
-`../archive/matmul-spm-lowering-closure.md`, `three-tier-placement.md`, and
+`matmul-spm-lowering-closure.md`, `../plans/three-tier-placement.md`, and
 `../evidence/l2_warming.md`.
 
 ## What Phase 3 Covers
@@ -174,7 +181,7 @@ single fixed number. This state is the result of four landed pieces:
 
 The archived measurement log still contains older concrete points, but do not
 use those as the current headline without rerunning a fair blocking sweep for
-both SPM and cache. See `../archive/matmul-spm-lowering-closure.md` §P3.0 /
+both SPM and cache. See `matmul-spm-lowering-closure.md` §P3.0 /
 §P3.5 for the historical measured tables and interpretation.
 
 Stage 2.6 also produced steady-state warm-cache data.  Those runs are not
@@ -305,8 +312,8 @@ specific experiment intentionally overrides the environment.
 
 ## Source Of Truth
 
-- `../archive/matmul-spm-lowering-closure.md`: archived matmul SPM lowering closure and P3 measurements.
-- `three-tier-placement.md`: three-tier placement design and backlog.
+- `matmul-spm-lowering-closure.md`: archived matmul SPM lowering closure and P3 measurements.
+- `../plans/three-tier-placement.md`: three-tier placement design and backlog.
 - `../evidence/l2_warming.md`: Tier 2 L2-warming verification results.
 - `phase3-compiler-backlog.md`: broader Phase 3 compiler audit and closure record.
-- `phase3-execution-timeline.md`: current execution order and task list.
+- `phase3-execution-timeline.md`: archived Phase 3 execution order and task list.

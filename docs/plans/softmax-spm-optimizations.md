@@ -60,12 +60,12 @@ TRITON_SPM_SOFTMAX_CACHE_EXP=1 python3 workloads/scripts/run_experiment.py \
 TRITON_SPM_SOFTMAX_CACHE_EXP=1 python3 workloads/scripts/run_experiment.py \
   softmax --mode spm-compare \
   --preset phase35-row-block-dma-large-row \
-  --override M=128 N=512
+  --set M=128 --set N=512
 
 TRITON_SPM_SOFTMAX_CACHE_EXP=1 python3 workloads/scripts/run_experiment.py \
   softmax --mode spm-compare \
   --preset phase35-row-block-dma-large-row \
-  --override M=64 N=512
+  --set M=64 --set N=512
 ```
 
 ## Optimization 2: Row-Contiguous SPM Layout (planned)

@@ -638,10 +638,11 @@ profitable.
 As of the P2f cleanup, Gate A is structurally useful but not closed as a
 default reduction-performance policy.  Reductions remain cache path by default:
 Softmax now has a clean SPM-only row-block transform that beats stock canonical
-cache on adjacent shapes, chunk-DMA prefetch is weaker and harmful for
-LayerNorm, and LayerNorm/small-row cases still need conservative rejection.
-Refit D3 before automatic promotion so the default policy can explain both the
-accepted Softmax SPM-only transform and the still-rejected reduction cases.
+cache on adjacent shapes, and the exp-cache variant improves those row-block
+wins further. Chunk-DMA prefetch is weaker and harmful for LayerNorm, and
+LayerNorm/small-row cases still need conservative rejection. Refit D3 before
+automatic promotion so the default policy can explain both the accepted Softmax
+SPM-only transform and the still-rejected reduction cases.
 
 Phase 3.5 owns that next task.  See
 `phase3.5-single-kernel-convergence.md` for the concrete pass/code plan:

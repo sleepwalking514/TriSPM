@@ -631,8 +631,11 @@ First targets:
   measured CPU-direct SPM win.  The measured DMA-prefetch variant is evidence
   against chunk-DMA for the current one-row schedule.  The true row-block DMA
   prototype is now buildable, correct, and profitable for the tuned Softmax
-  large-row shape, so Phase 3.5 should move that evidence into the D3
-  profitability refit before changing defaults.
+  large-row shape.  The opt-in exp-cache path
+  (`TRITON_SPM_SOFTMAX_CACHE_EXP=1`) improves the current row-block results by
+  about 20 percentage points on the measured 64x512, 128x512, and 128x1024
+  shapes.  Phase 3.5 should move this evidence into the D3 profitability refit
+  before changing defaults.
 - Keep reduction SPM default-off unless the promotion path beats cache on the
   existing 32x64 and 512x1024 comparisons.  LayerNorm fill-on-first-pass is
   near parity but not yet a clear default; Softmax large-row is promising.
@@ -690,9 +693,9 @@ SPM vs cache cost-effectiveness at equal silicon area:
 Phase 1 (AOT cross-compile) ✅ COMPLETE
   └─> Phase 2 (DMA dialect ops + address spaces + lowering) ✅ COMPLETE
         └─> Phase 3 (SPM pass: GEMM → reduction → data placement) ✅ matmul/compiler robustness closed
-              ├─> Phase 3.5 (single-kernel reduction SPM convergence) ← CURRENT NEXT
-              │     └─> Phase 4 (Attention + multi-kernel SPM + optimizations)
-              │           └─> Phase 5 (End-to-end transformer inference pipeline)
+              ├─> Phase 3.5 (single-kernel reduction SPM policy) ← CURRENT POLICY GATE
+              ├─> Phase 4 (executable graph harness + attention/multi-kernel SPM) ← NEXT IMPLEMENTATION
+              │     └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
                     ├─ 6a Cache baseline [Phase 3 matmul/layer_norm baseline ready]
                     ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + graph build/verify done; executable graph pending]
@@ -702,7 +705,9 @@ Phase 1 (AOT cross-compile) ✅ COMPLETE
                     └─ 6f Sensitivity analysis [built on 6a framework]
 ```
 
-**Minimum viable paper:** Phase 1 + 2 + 3 + 3.5 + 6a + 6b (GEMM + reduction, SPM vs Cache comparison, Tier 2 verification)
+**Minimum viable paper:** Phase 1 + 2 + 3 + Phase 4 graph harness + 6a + 6b,
+with Phase 3.5 supplying the conservative default policy for reductions (GEMM
+and reduction evidence, SPM vs Cache comparison, Tier 2 verification)
 **Solid paper (CGO/PACT level):** + 6c + 6d (5 workloads, breakdown analysis)
 **Strong paper (ASPLOS/MICRO attempt):** + Phase 5 + 6e + 6f (end-to-end pipeline, area comparison, sensitivity analysis)
 
