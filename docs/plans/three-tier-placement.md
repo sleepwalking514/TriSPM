@@ -309,7 +309,7 @@ Verification:
 ### 6.2 Graph-level placement for transformer pipeline (P0)
 
 Status: **build/verify MVP landed (2026-05-02); first executable graph smoke
-landed (2026-05-06)**.
+and graph-vs-cache reporting landed (2026-05-06)**.
 
 Implemented:
 
@@ -335,12 +335,14 @@ Implemented:
   now links the graph ELF and runs gem5. The first 32x64 -> Q/K/V smoke passed
   both SPM and cache result gates. ROI stats are written under
   `workloads/m5out/graphs/layer_norm_qkv/{spm,cache}/default/`.
+- `workloads/scripts/graph_placement.py --mode compare` now builds and runs
+  both graph modes from the shared manifest, validates both result gates, reuses
+  `compare_stats.py` for graph ROI stats, and writes
+  `compare_vs_cache.txt`, `spm_stats.txt`, and `graph_report.txt` under
+  `workloads/m5out/graphs/layer_norm_qkv/spm/default/`.
 
 Not implemented yet:
 
-- No graph-vs-cache comparison yet.  Cache baseline policy should keep all
-  tensors cacheable unless a specific experiment intentionally studies UC
-  backing placement.
 - No Tier 1 resident SPM support.  The manifest may document future hot-state
   intent, but the planner rejects Tier 1 as an implementation target for now.
 - No fused SPM promotion.  Graph placement decides backing allocation across
@@ -349,8 +351,6 @@ Not implemented yet:
 
 Next work:
 
-- Add graph-vs-cache reporting from the shared graph manifest so SPM/Tier
-  decisions, cache-only baselines, and graph ROI stats are emitted together.
 - Extend the fixture set from `layer_norm -> qkv` to attention-facing schedules
   (`qk`, softmax, `pv`, residual/activation) once the required shapes and AOT
   symbol naming are settled.

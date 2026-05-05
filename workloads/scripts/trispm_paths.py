@@ -115,6 +115,18 @@ def graph_run_log_path(graph: str, mode: str) -> Path:
     return graph_m5out_dir(graph, mode) / "run.log"
 
 
+def graph_compare_path(graph: str) -> Path:
+    return graph_m5out_dir(graph, "spm") / "compare_vs_cache.txt"
+
+
+def graph_spm_stats_path(graph: str) -> Path:
+    return graph_m5out_dir(graph, "spm") / "spm_stats.txt"
+
+
+def graph_report_path(graph: str) -> Path:
+    return graph_m5out_dir(graph, "spm") / "graph_report.txt"
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -134,6 +146,9 @@ def main() -> None:
             "graph_m5out_dir",
             "graph_roi_stats",
             "graph_run_log",
+            "graph_compare",
+            "graph_spm_stats",
+            "graph_report",
         ],
     )
     p.add_argument("kernel")
@@ -156,6 +171,17 @@ def main() -> None:
             "cache_best": cache_best_path,
         }
         print(fns[args.what](args.kernel, args.tag))
+    elif args.what in (
+        "graph_compare",
+        "graph_spm_stats",
+        "graph_report",
+    ):
+        fns = {
+            "graph_compare": graph_compare_path,
+            "graph_spm_stats": graph_spm_stats_path,
+            "graph_report": graph_report_path,
+        }
+        print(fns[args.what](args.kernel))
     elif args.what.startswith("graph_"):
         if args.mode is None:
             p.error(f"{args.what} requires mode to be one of {MODES}")

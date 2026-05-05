@@ -10,6 +10,7 @@ Usage:
   scripts/graph_placement.py layer_norm_qkv --mode plan
   scripts/graph_placement.py layer_norm_qkv --mode verify
   scripts/graph_placement.py layer_norm_qkv --mode run
+  scripts/graph_placement.py layer_norm_qkv --mode compare
 """
 from __future__ import annotations
 
@@ -195,6 +196,18 @@ def graph_run_log_path(graph_name: str, mode: str) -> Path:
 
 def graph_roi_stats_path(graph_name: str, mode: str) -> Path:
     return trispm_paths.graph_roi_stats_path(graph_name, mode)
+
+
+def graph_compare_path(graph_name: str) -> Path:
+    return trispm_paths.graph_compare_path(graph_name)
+
+
+def graph_spm_stats_path(graph_name: str) -> Path:
+    return trispm_paths.graph_spm_stats_path(graph_name)
+
+
+def graph_report_path(graph_name: str) -> Path:
+    return trispm_paths.graph_report_path(graph_name)
 
 
 def render_graph_cflags(graph: dict[str, Any]) -> str:
@@ -385,6 +398,129 @@ def validate_graph_run(graph_name: str, mode: str) -> None:
     )
 
 
+def ensure_graph_roi_stats(graph_name: str, mode: str) -> Path:
+    roi_stats = graph_roi_stats_path(graph_name, mode)
+    if not roi_stats.is_file():
+        sys.exit(
+            f"ERROR: graph {mode} ROI stats are missing: "
+            f"{roi_stats.relative_to(WORKLOADS_DIR)}"
+        )
+    return roi_stats
+
+
+def run_graph_compare_stats(graph_name: str) -> tuple[Path, Path]:
+    spm_stats = ensure_graph_roi_stats(graph_name, "spm")
+    cache_stats = ensure_graph_roi_stats(graph_name, "cache")
+    compare = graph_compare_path(graph_name)
+    spm_only = graph_spm_stats_path(graph_name)
+    run([
+        str(SCRIPTS_DIR / "compare_stats.py"),
+        "--spm", str(spm_stats),
+        "--cache", str(cache_stats),
+        "--measure-iters", "1",
+        "--output", str(compare),
+        "--spm-only-output", str(spm_only),
+    ])
+    return compare, spm_only
+
+
+def graph_log_status(graph_name: str, mode: str) -> str:
+    run_log = graph_run_log_path(graph_name, mode)
+    if not run_log.is_file():
+        return "missing run.log"
+    text = run_log.read_text(errors="replace")
+    bad = re.search(r"\b(FAIL|MISMATCH):", text)
+    if "PASS: graph outputs correct" in text and not bad:
+        return "PASS"
+    if bad:
+        return "FAIL"
+    if "SKIP: graph result check disabled" in text:
+        return "SKIP"
+    return "UNKNOWN"
+
+
+def summarize_run_rows(graph_name: str) -> list[tuple[str, str, str, str]]:
+    rows: list[tuple[str, str, str, str]] = []
+    for mode in ("spm", "cache"):
+        rows.append((
+            mode,
+            str(graph_binary_path(graph_name, mode).relative_to(WORKLOADS_DIR)),
+            str(graph_roi_stats_path(graph_name, mode).relative_to(WORKLOADS_DIR)),
+            graph_log_status(graph_name, mode),
+        ))
+    return rows
+
+
+def write_graph_report(
+    graph_name: str,
+    graph: dict[str, Any],
+    plans: list[NodePlan],
+    compare: Path,
+    spm_only: Path,
+) -> Path:
+    out = graph_report_path(graph_name)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    graph_meta = dict(graph.get("graph", {}))
+    harness_params = {
+        str(k): str(v)
+        for k, v in dict(dict(graph.get("harness", {})).get("params", {})).items()
+    }
+    lines = [
+        f"# Graph Compare Report: {graph_name}",
+        "",
+        f"description: {graph_meta.get('description', '')}",
+        "",
+        "## Harness Params",
+        "",
+        render_table(
+            [(key, value) for key, value in sorted(harness_params.items())],
+            ("param", "value"),
+        ),
+        "",
+        "## Placement Decisions",
+        "",
+        render_table(plan_as_rows(plans), ("node", "kernel", "arg", "tier", "reason")),
+        "",
+        "## Run Artifacts",
+        "",
+        render_table(summarize_run_rows(graph_name), ("mode", "binary", "roi_stats", "result")),
+        "",
+        "## SPM vs Cache",
+        "",
+        f"compare: {compare.relative_to(WORKLOADS_DIR)}",
+        f"spm_only: {spm_only.relative_to(WORKLOADS_DIR)}",
+        "",
+        compare.read_text().rstrip(),
+        "",
+        "## SPM-only Stats",
+        "",
+        spm_only.read_text().rstrip(),
+        "",
+    ]
+    out.write_text("\n".join(lines))
+    return out
+
+
+def compare_graph(
+    graph_name: str,
+    graph: dict[str, Any],
+    plans: list[NodePlan],
+    skip_build: bool,
+    gem5_flags: list[str],
+) -> None:
+    for mode in ("spm", "cache"):
+        if not skip_build:
+            build_graph_executable(graph_name, graph, plans, mode)
+        run_graph_executable(graph_name, mode, gem5_flags)
+        validate_graph_run(graph_name, mode)
+
+    compare, spm_only = run_graph_compare_stats(graph_name)
+    report = write_graph_report(graph_name, graph, plans, compare, spm_only)
+    print(f"Graph compare saved: {compare.relative_to(WORKLOADS_DIR)}")
+    print(f"Graph SPM stats:    {spm_only.relative_to(WORKLOADS_DIR)}")
+    print(f"Graph report:       {report.relative_to(WORKLOADS_DIR)}")
+
+
 def expected_allocator(tier: int, kernel: str) -> str:
     if tier == TIER_SPM_RESIDENT:
         return "spm_malloc(nbytes)"
@@ -479,7 +615,7 @@ def main() -> None:
     parser.add_argument("graph", help="graph name under workloads/graphs/<name>/graph.toml")
     parser.add_argument(
         "--mode",
-        choices=("plan", "build", "verify", "build-exec", "run"),
+        choices=("plan", "build", "verify", "build-exec", "run", "compare"),
         default="plan",
     )
     parser.add_argument(
@@ -534,6 +670,9 @@ def main() -> None:
     if args.mode == "run":
         run_graph_executable(args.graph, args.exec_mode, args.gem5_flag)
         validate_graph_run(args.graph, args.exec_mode)
+
+    if args.mode == "compare":
+        compare_graph(args.graph, graph, plans, args.skip_build, args.gem5_flag)
 
 
 if __name__ == "__main__":
