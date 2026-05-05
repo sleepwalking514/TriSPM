@@ -1,19 +1,23 @@
 [graph]
 name = "attention_smoke"
-description = "Small attention-facing graph smoke: layer_norm -> q/k/v -> qk -> softmax -> pv -> residual_add -> activation."
+description = "Attention-facing graph smoke with realistic QK/PV layouts: layer_norm -> q/k/v -> k_transpose -> qk -> softmax -> pv -> residual_add -> activation."
 
 [harness]
 source = "harness.c"
 
 [harness.params]
-DIM = 32
-BLOCK = 32
+SEQ = 32
+D_MODEL = 32
+HEAD_DIM = 16
+BLOCK = 16
 CHECK_RESULT = 1
 FLUSH_BEFORE_ROI = 1
 
 [harness.build]
 c_macros = [
-    "GRAPH_DIM={DIM}",
+    "GRAPH_SEQ={SEQ}",
+    "GRAPH_D_MODEL={D_MODEL}",
+    "GRAPH_HEAD_DIM={HEAD_DIM}",
     "GRAPH_BLOCK={BLOCK}",
     "GRAPH_CHECK_RESULT={CHECK_RESULT}",
     "GRAPH_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
@@ -61,37 +65,49 @@ dma_only = true
 kind = "intermediate"
 producer = "q_proj"
 consumers = ["qk"]
+note = "Shape [SEQ, HEAD_DIM]."
 
 [tensors.k]
 kind = "intermediate"
 producer = "k_proj"
+consumers = ["k_transpose"]
+note = "Shape [SEQ, HEAD_DIM]; transposed before QK."
+
+[tensors.k_t]
+kind = "intermediate"
+producer = "k_transpose"
 consumers = ["qk"]
-note = "Smoke fixture uses square DIM so qk can reuse the existing matmul symbol without a transpose kernel."
+note = "Shape [HEAD_DIM, SEQ], making QK a real [SEQ, HEAD_DIM] x [HEAD_DIM, SEQ] matmul."
 
 [tensors.v]
 kind = "intermediate"
 producer = "v_proj"
 consumers = ["pv"]
+note = "Shape [SEQ, HEAD_DIM]."
 
 [tensors.scores]
 kind = "intermediate"
 producer = "qk"
 consumers = ["softmax"]
+note = "Shape [SEQ, SEQ]."
 
 [tensors.probs]
 kind = "intermediate"
 producer = "softmax"
 consumers = ["pv"]
+note = "Shape [SEQ, SEQ]."
 
 [tensors.attn]
 kind = "intermediate"
 producer = "pv"
 consumers = ["residual_add"]
+note = "Shape [SEQ, HEAD_DIM]."
 
 [tensors.residual]
 kind = "external_input"
 read_only = true
 dma_only = false
+note = "Shape [SEQ, HEAD_DIM]."
 
 [tensors.resid_out]
 kind = "intermediate"
@@ -120,10 +136,10 @@ tag = "graph/attention_smoke/q_proj"
 
 [nodes.q_proj.params]
 M = 32
-N = 32
+N = 16
 K = 32
 BLOCK_SIZE_M = 32
-BLOCK_SIZE_N = 32
+BLOCK_SIZE_N = 16
 BLOCK_SIZE_K = 32
 CHECK_RESULT = 0
 
@@ -134,10 +150,10 @@ tag = "graph/attention_smoke/k_proj"
 
 [nodes.k_proj.params]
 M = 32
-N = 32
+N = 16
 K = 32
 BLOCK_SIZE_M = 32
-BLOCK_SIZE_N = 32
+BLOCK_SIZE_N = 16
 BLOCK_SIZE_K = 32
 CHECK_RESULT = 0
 
@@ -148,25 +164,37 @@ tag = "graph/attention_smoke/v_proj"
 
 [nodes.v_proj.params]
 M = 32
-N = 32
+N = 16
 K = 32
 BLOCK_SIZE_M = 32
-BLOCK_SIZE_N = 32
+BLOCK_SIZE_N = 16
 BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.k_transpose]
+kernel = "transpose"
+args = ["k", "k_t"]
+tag = "graph/attention_smoke/k_transpose"
+
+[nodes.k_transpose.params]
+M = 32
+N = 16
+BLOCK_M = 16
+BLOCK_N = 16
 CHECK_RESULT = 0
 
 [nodes.qk]
 kernel = "matmul"
-args = ["q", "k", "scores"]
+args = ["q", "k_t", "scores"]
 tag = "graph/attention_smoke/qk"
 
 [nodes.qk.params]
 M = 32
 N = 32
-K = 32
+K = 16
 BLOCK_SIZE_M = 32
-BLOCK_SIZE_N = 32
-BLOCK_SIZE_K = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 16
 CHECK_RESULT = 0
 
 [nodes.softmax]
@@ -190,10 +218,10 @@ tag = "graph/attention_smoke/pv"
 
 [nodes.pv.params]
 M = 32
-N = 32
+N = 16
 K = 32
 BLOCK_SIZE_M = 32
-BLOCK_SIZE_N = 32
+BLOCK_SIZE_N = 16
 BLOCK_SIZE_K = 32
 CHECK_RESULT = 0
 
@@ -203,8 +231,8 @@ args = ["attn", "residual", "resid_out"]
 tag = "graph/attention_smoke/residual_add"
 
 [nodes.residual_add.params]
-SIZE = 1024
-BLOCK_SIZE = 32
+SIZE = 512
+BLOCK_SIZE = 16
 CHECK_RESULT = 0
 
 [nodes.activation]
@@ -213,6 +241,6 @@ args = ["resid_out", "act_out"]
 tag = "graph/attention_smoke/activation"
 
 [nodes.activation.params]
-SIZE = 1024
-BLOCK_SIZE = 32
+SIZE = 512
+BLOCK_SIZE = 16
 CHECK_RESULT = 0

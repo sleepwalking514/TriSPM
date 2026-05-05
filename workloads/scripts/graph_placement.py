@@ -22,6 +22,7 @@ import shlex
 import subprocess
 import sys
 import tomllib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,10 @@ class NodePlan:
     def tier_override(self) -> str:
         return ",".join(f"{idx}={tier}" for idx, tier in sorted(self.arg_tiers.items()))
 
+    @property
+    def c_name(self) -> str:
+        return sanitize_c_ident(self.name)
+
 
 def load_graph(name: str) -> dict[str, Any]:
     path = GRAPHS_DIR / name / "graph.toml"
@@ -66,6 +71,16 @@ def load_graph(name: str) -> dict[str, Any]:
     data = tomllib.loads(path.read_text())
     data["_path"] = path
     return data
+
+
+def sanitize_c_ident(value: str) -> str:
+    ident = re.sub(r"\W+", "_", value.strip())
+    ident = ident.strip("_")
+    if not ident:
+        raise ValueError(f"cannot derive a C identifier from {value!r}")
+    if ident[0].isdigit():
+        ident = f"n_{ident}"
+    return ident
 
 
 def choose_tensor_tier(tensor_name: str, tensor: dict[str, Any]) -> TensorDecision:
@@ -222,6 +237,118 @@ def render_graph_cflags(graph: dict[str, Any]) -> str:
         ) from exc
 
 
+def replace_c_identifier(text: str, old: str, new: str) -> str:
+    return re.sub(rf"\b{re.escape(old)}\b", new, text)
+
+
+def namespace_asm(text: str, old: str, new: str) -> str:
+    return replace_c_identifier(text, old, new)
+
+
+def node_symbol(plan: NodePlan, suffix: str = "") -> str:
+    return f"{plan.kernel}_{plan.c_name}{suffix}"
+
+
+def namespace_graph_nodes(
+    out_dir: Path,
+    graph_name: str,
+    plans: list[NodePlan],
+    node_dirs: dict[str, Path],
+) -> list[dict[str, Path]]:
+    name_counts = Counter(plan.c_name for plan in plans)
+    collisions = sorted(name for name, count in name_counts.items() if count > 1)
+    if collisions:
+        joined = ", ".join(collisions)
+        sys.exit(f"ERROR: graph {graph_name} has duplicate C node names: {joined}")
+
+    artifacts: list[dict[str, Path]] = []
+    launcher_units: list[str] = [
+        '#include "graph_nodes.h"',
+        "",
+    ]
+    header_lines = [
+        f"#ifndef {sanitize_c_ident(graph_name).upper()}_GRAPH_NODES_H",
+        f"#define {sanitize_c_ident(graph_name).upper()}_GRAPH_NODES_H",
+        "",
+        "#include <stddef.h>",
+        "#include <stdint.h>",
+        "",
+    ]
+
+    for plan in plans:
+        build_dir = node_dirs[plan.name]
+        source_symbol = plan.kernel
+        asm_symbol = node_symbol(plan)
+        launch_symbol = node_symbol(plan, "_launch")
+        alloc_symbol = node_symbol(plan, "_alloc")
+        free_symbol = node_symbol(plan, "_free_all")
+        record_symbol = node_symbol(plan, "_record_malloc")
+        malloc_ptrs_symbol = node_symbol(plan, "_malloc_ptrs")
+        malloc_count_symbol = node_symbol(plan, "_malloc_count")
+
+        asm_src = build_dir / f"{plan.kernel}.s"
+        launcher_src = build_dir / f"{plan.kernel}_launcher.c"
+        launcher_hdr = build_dir / f"{plan.kernel}_launcher.h"
+
+        node_prefix = f"{plan.c_name}_{plan.kernel}"
+        asm_dst = out_dir / f"{node_prefix}.s"
+        launcher_dst = out_dir / f"{node_prefix}_launcher.c"
+        header_dst = out_dir / f"{node_prefix}_launcher.h"
+
+        asm_text = namespace_asm(asm_src.read_text(), source_symbol, asm_symbol)
+        asm_dst.write_text(asm_text)
+
+        header_text = launcher_hdr.read_text()
+        for old, new in (
+            (f"{plan.kernel}_launch", launch_symbol),
+            (f"{plan.kernel}_alloc", alloc_symbol),
+            (f"{plan.kernel}_free_all", free_symbol),
+        ):
+            header_text = replace_c_identifier(header_text, old, new)
+        header_text = header_text.replace(
+            f"{plan.kernel.upper()}_LAUNCHER_H",
+            f"{node_prefix.upper()}_LAUNCHER_H",
+        )
+        header_dst.write_text(header_text)
+
+        launcher_text = launcher_src.read_text()
+        launcher_text = launcher_text.replace(
+            f'#include "{plan.kernel}_launcher.h"',
+            f'#include "{node_prefix}_launcher.h"',
+        )
+        replacements = (
+            (f"{plan.kernel}_record_malloc", record_symbol),
+            (f"{plan.kernel}_malloc_ptrs", malloc_ptrs_symbol),
+            (f"{plan.kernel}_malloc_count", malloc_count_symbol),
+            (f"{plan.kernel}_launch", launch_symbol),
+            (f"{plan.kernel}_alloc", alloc_symbol),
+            (f"{plan.kernel}_free_all", free_symbol),
+            (plan.kernel, asm_symbol),
+        )
+        for old, new in replacements:
+            launcher_text = replace_c_identifier(launcher_text, old, new)
+        launcher_dst.write_text(launcher_text)
+        launcher_units += [
+            f"/* graph node: {plan.name} ({plan.kernel}) */",
+            launcher_text,
+            "",
+        ]
+
+        header_lines += [
+            f'#include "{node_prefix}_launcher.h"',
+            f"#define {plan.c_name}_launch {launch_symbol}",
+            f"#define {plan.c_name}_alloc {alloc_symbol}",
+            f"#define {plan.c_name}_free_all {free_symbol}",
+            "",
+        ]
+        artifacts.append({"asm": asm_dst, "launcher_c": launcher_dst, "launcher_h": header_dst})
+
+    header_lines += [f"#endif /* {sanitize_c_ident(graph_name).upper()}_GRAPH_NODES_H */", ""]
+    (out_dir / "graph_nodes.h").write_text("\n".join(header_lines))
+    (out_dir / "graph_node_launchers.c").write_text("\n".join(launcher_units))
+    return artifacts
+
+
 def source_env() -> dict[str, str]:
     cmd = (
         "set -euo pipefail; "
@@ -251,34 +378,14 @@ def compile_graph(graph_name: str, graph: dict[str, Any], plans: list[NodePlan],
     out_dir = graph_build_dir(graph_name, mode)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    representative_by_kernel: dict[str, NodePlan] = {}
-    params_by_kernel: dict[str, dict[str, str]] = {}
-    for plan in plans:
-        if plan.kernel not in representative_by_kernel:
-            representative_by_kernel[plan.kernel] = plan
-            params_by_kernel[plan.kernel] = plan.params
-            continue
-        if plan.params != params_by_kernel[plan.kernel]:
-            first = representative_by_kernel[plan.kernel]
-            sys.exit(
-                "ERROR: executable graph currently links one symbol set per "
-                f"kernel, but {plan.kernel!r} has multiple parameter sets:\n"
-                f"  first node {first.name}: {params_by_kernel[plan.kernel]}\n"
-                f"  node {plan.name}: {plan.params}\n"
-                "Use a same-shape smoke graph or add namespaced AOT symbols "
-                "before mixing shapes for one kernel in a single ELF."
-            )
-
-    node_dirs = {
-        kernel: node_build_dir(plan, mode)
-        for kernel, plan in representative_by_kernel.items()
-    }
+    node_dirs = {plan.name: node_build_dir(plan, mode) for plan in plans}
     required: list[Path] = []
-    for kernel, build_dir in node_dirs.items():
+    for plan in plans:
+        build_dir = node_dirs[plan.name]
         required += [
-            build_dir / f"{kernel}.s",
-            build_dir / f"{kernel}_launcher.c",
-            build_dir / f"{kernel}_launcher.h",
+            build_dir / f"{plan.kernel}.s",
+            build_dir / f"{plan.kernel}_launcher.c",
+            build_dir / f"{plan.kernel}_launcher.h",
         ]
     missing = [path for path in required if not path.is_file()]
     if missing:
@@ -291,19 +398,11 @@ def compile_graph(graph_name: str, graph: dict[str, Any], plans: list[NodePlan],
         sys.exit(f"ERROR: graph harness source not found: {harness_source}")
 
     graph_cflags = render_graph_cflags(graph)
+    node_artifacts = namespace_graph_nodes(out_dir, graph_name, plans, node_dirs)
     binary = graph_binary_path(graph_name, mode)
-    include_flags = [
-        f"-I{node_dirs[kernel]}"
-        for kernel in sorted(node_dirs)
-    ]
-    asm_sources = [
-        str(node_dirs[kernel] / f"{kernel}.s")
-        for kernel in sorted(node_dirs)
-    ]
-    launcher_sources = [
-        str(node_dirs[kernel] / f"{kernel}_launcher.c")
-        for kernel in sorted(node_dirs)
-    ]
+    include_flags = [f"-I{out_dir}"]
+    asm_sources = [str(artifact["asm"]) for artifact in node_artifacts]
+    launcher_sources = [str(out_dir / "graph_node_launchers.c")]
     cmd = [
         env["CLANG"],
         *shlex.split(env["CLANG_FLAGS"]),
@@ -684,7 +783,13 @@ def main() -> None:
             sys.exit(1)
         print(f"\n{args.graph}: graph placement verification passed")
 
-    if args.mode in {"build-exec", "run"} and not args.skip_build:
+    if args.mode == "build-exec":
+        if args.skip_build:
+            compile_graph(args.graph, graph, plans, args.exec_mode)
+        else:
+            build_graph_executable(args.graph, graph, plans, args.exec_mode)
+
+    if args.mode == "run" and not args.skip_build:
         build_graph_executable(args.graph, graph, plans, args.exec_mode)
 
     if args.mode == "run":

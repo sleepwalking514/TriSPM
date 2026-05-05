@@ -24,10 +24,14 @@ current implementation focus has moved to Phase 4 graph execution.  The first
 LayerNorm and matmul AOT artifacts into one ELF, allocates graph tensors once,
 keeps the activation backbone Tier 2, passes SPM/cache gem5 smoke checks, and
 now emits graph-vs-cache reports from the shared graph manifest.  A second
-`attention_smoke` graph now exercises the attention-facing sequence
-`layer_norm -> q/k/v -> qk -> softmax -> pv -> residual_add -> activation` at a
-small square smoke shape, and Phase 6 graph-eval artifacts can be generated
-directly from either graph manifest.
+`attention_smoke` graph now exercises realistic attention-facing QK/PV layouts:
+`layer_norm -> q/k/v -> k_transpose -> qk -> softmax -> pv -> residual_add ->
+activation` at `SEQ=32, D_MODEL=32, HEAD_DIM=16`.  The graph linker can
+namespace per-node AOT symbols, so one ELF can carry multiple matmul shapes.
+Both SPM/cache gem5 result gates pass, and Phase 6 graph-eval artifacts can be
+generated directly from either graph manifest.  The current realistic
+attention smoke remains structural coverage rather than a performance headline:
+253,859 SPM cycles vs 252,410 cache cycles (`+0.6%`).
 The old streaming reduction SPM path is correctness/coverage only; it still
 loses badly because it emits many tiny DMA transactions.  The newer LayerNorm
 row-resident path is different: it uses CPU-direct SPM residency.  The first
@@ -138,11 +142,11 @@ systems work moves to Phase 4 graph execution.
 | Past | Done | [`evidence/l2_warming.md`](evidence/l2_warming.md) | Tier 2 L2-warming claim has source-level and microbenchmark evidence. |
 | Past | Done | [`archive/phase3-compiler-backlog.md`](archive/phase3-compiler-backlog.md) P1 | GEMM extra-load matching, reduction multi-load matching, DMA lowering options, and GEMM/reduction bail-out cleanup are complete for the current coverage. |
 | Past | Done | [`archive/phase3.md`](archive/phase3.md) + [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6c | Transformer-facing single-kernel coverage landed for `activation`, `residual_add`, and `softmax`; each builds/verifies as cache path and has flushed ROI smoke compares. |
-| Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify, executable `layer_norm -> q/k/v` and `attention_smoke` gem5 smokes, graph-vs-cache reporting, and Phase 6 graph-eval summaries: cacheable activation backbone, selective UC streaming weights, and explicit Tier 1/fusion non-goals. |
+| Current | Done MVP | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §2.1 / §6.2 | Graph-level conservative placement planner landed for build/verify, executable `layer_norm -> q/k/v` and realistic-QK/PV `attention_smoke` gem5 smokes, graph-vs-cache reporting, and Phase 6 graph-eval summaries: cacheable activation backbone, selective UC streaming weights, per-node AOT symbol namespacing, and explicit Tier 1/fusion non-goals. |
 | Past | Done | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D2 | Opt-in row-resident LayerNorm promotion now uses fill-on-first-pass SPM materialization. It validates separately from both default cache path and old streaming reduction coverage, and it has improved from large regressions to near parity. |
 | Past | Done | [`plans/spm-explicit-promotion.md`](plans/spm-explicit-promotion.md) D3/P3 | Conservative profitability evidence landed: accepts fused matmul and Softmax row-block evidence, rejects streaming reductions, small row-resident reductions, producer-store, and chunk-DMA, while default standalone reduction SPM remains off. |
 | Past | Done | [`plans/phase3.5-single-kernel-convergence.md`](plans/phase3.5-single-kernel-convergence.md) P4 | Phase 3.5 is closed as a conservative admission-control guardrail, not an automatic profiler or default-enablement claim. |
-| Current | Next implementation | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.2 | Extend attention-facing graph fixtures beyond the current square smoke shape toward realistic QK/PV layouts; producer-consumer SPM promotion remains later. |
+| Current | Next implementation | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 + [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.2 | Fold graph eval JSON files into broader Phase 6 aggregation/plot scripts, then extend from attention smoke toward a fuller decoder block; producer-consumer SPM promotion remains later. |
 | Current | Active optimization | [`plans/spm-dma-reuse.md`](plans/spm-dma-reuse.md) | First fused microM-aware scheduler implementation exists. Default `windowK=4` remains conservative; `windowK=auto`/autotune should be evidence-driven and queue-depth-aware. |
 | Later | Planned | [`plans/three-tier-placement.md`](plans/three-tier-placement.md) §6.1 -> [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 4/5 | Tier 1 resident SPM, attention/multi-kernel SPM management, then end-to-end transformer inference. |
 | Later | Planned | [`plans/compiler-roadmap.md`](plans/compiler-roadmap.md) Phase 6 | Paper evaluation: cache baseline, workload coverage, breakdowns, area-equivalent comparison, and sensitivity analysis. |

@@ -1,0 +1,39 @@
+[kernel]
+name = "transpose"
+env_prefix = "TRANSPOSE_"
+tag_template = "{M}x{N}/bs{BLOCK_M}x{BLOCK_N}"
+expect_spm = false
+
+[params]
+M = 32
+N = 16
+BLOCK_M = 8
+BLOCK_N = 16
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+
+[build]
+c_macros = [
+    "M={M}",
+    "N={N}",
+    "BLOCK_M={BLOCK_M}",
+    "BLOCK_N={BLOCK_N}",
+    "TRANSPOSE_WARMUP_ITERS={WARMUP_ITERS}",
+    "TRANSPOSE_MEASURE_ITERS={MEASURE_ITERS}",
+    "TRANSPOSE_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+    "TRANSPOSE_CHECK_RESULT={CHECK_RESULT}",
+]
+
+[presets.steady]
+WARMUP_ITERS = 2
+MEASURE_ITERS = 5
+FLUSH_BEFORE_ROI = 0
+
+[sweeps.blocking]
+values = [
+    { BLOCK_M = 8, BLOCK_N = 16 },
+    { BLOCK_M = 16, BLOCK_N = 16 },
+]
+tag_template = "{M}x{N}/bs{BLOCK_M}x{BLOCK_N}"

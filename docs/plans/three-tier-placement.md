@@ -309,8 +309,8 @@ Verification:
 ### 6.2 Graph-level placement for transformer pipeline (P0)
 
 Status: **build/verify MVP landed (2026-05-02); first executable graph smoke,
-attention-facing smoke, graph-vs-cache reporting, and Phase 6 graph-eval
-summary landed (2026-05-06)**.
+realistic-QK/PV attention-facing smoke, graph-vs-cache reporting, and Phase 6
+graph-eval summary landed (2026-05-06)**.
 
 Implemented:
 
@@ -341,17 +341,25 @@ Implemented:
   `compare_stats.py` for graph ROI stats, and writes
   `compare_vs_cache.txt`, `spm_stats.txt`, and `graph_report.txt` under
   `workloads/m5out/graphs/layer_norm_qkv/spm/default/`.
-- `workloads/graphs/attention_smoke/graph.toml` extends graph coverage toward
-  attention schedules: `layer_norm -> q/k/v -> qk -> softmax -> pv ->
-  residual_add -> activation`.  It intentionally uses a 32x32 square smoke
-  shape so all matmul nodes can share one current AOT symbol set; realistic QK
-  transpose/PV shapes still require namespaced multi-shape AOT symbols or
-  additional graph kernels.
+- `workloads/scripts/graph_placement.py` now namespaces per-node AOT artifacts
+  when linking executable graphs.  It rewrites kernel/launcher symbols into
+  node-local names and emits `graph_nodes.h`, so a single graph ELF can contain
+  multiple instances of the same kernel compiled with different shapes.  The
+  generated node launchers are compiled as one translation unit so graph-wide
+  `libspm.h` static allocator state is shared instead of resetting per node.
+- `workloads/kernels/transpose/` adds a cache-path transpose kernel used by the
+  attention fixture to materialize `K^T`.
+- `workloads/graphs/attention_smoke/graph.toml` now extends graph coverage
+  toward attention schedules with realistic QK/PV layouts:
+  `layer_norm -> q/k/v -> k_transpose -> qk -> softmax -> pv -> residual_add
+  -> activation`.  The smoke shape is `SEQ=32, D_MODEL=32, HEAD_DIM=16`, so
+  `qk` is `[32,16] x [16,32]` and `pv` is `[32,32] x [32,16]` rather than the
+  previous square placeholder.
 - `workloads/scripts/phase6_graph_eval.py` consumes the graph manifest,
   invokes the graph compare path, and writes `phase6_eval.json` plus
-  `phase6_summary.txt` alongside the graph report.  The first
+  `phase6_summary.txt` alongside the graph report.  The realistic-QK/PV
   `attention_smoke` run passed both SPM/cache result gates; at this small smoke
-  shape SPM measured 161,575 cycles vs 143,052 cache cycles (`+12.9%`), so this
+  shape SPM measured 253,859 cycles vs 252,410 cache cycles (`+0.6%`), so this
   is structural/evaluation coverage rather than a performance headline.
 
 Not implemented yet:
@@ -364,10 +372,10 @@ Not implemented yet:
 
 Next work:
 
-- Move beyond the square `attention_smoke` fixture toward realistic QK/PV
-  layouts once AOT symbol namespacing or per-node kernel symbols allow one ELF
-  to link multiple matmul shapes.
 - Feed graph eval JSON files into broader Phase 6 aggregation/plot scripts.
+- Extend from `attention_smoke` toward a fuller decoder-block fixture with
+  output projection and FFN nodes while keeping producer outputs on the Tier 2
+  activation backbone.
 
 ### 6.2.1 Transformer-facing kernel harness coverage
 - [🆗] 第一版已完成（2026-05-02）：`activation`（SiLU）、

@@ -41,7 +41,7 @@
 #   make clean                  rm -rf workloads/build
 # ============================================================
 
-KERNELS := vector_add matmul layer_norm activation residual_add softmax
+KERNELS := vector_add matmul layer_norm activation residual_add softmax transpose
 
 PRESET ?=
 SWEEP  ?= blocking

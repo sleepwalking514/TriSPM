@@ -574,9 +574,12 @@ The three-tier placement policy is the paper's most valuable insight. The Tier 2
   Tier 3 for external read-only DMA-only tensors.  The first executable
   `layer_norm -> q/k/v` graph harness, the attention-facing `attention_smoke`
   harness, graph-vs-cache report mode, and Phase 6 graph-eval JSON/summary
-  artifacts are now in place.  The remaining work is to extend beyond the
-  square smoke shape to realistic QK/PV layouts and fold graph eval JSON files
-  into final aggregation/plot scripts.
+  artifacts are now in place.  `attention_smoke` now uses per-node AOT symbol
+  namespacing plus a cache-path transpose kernel to link realistic QK/PV
+  layouts in one ELF (`SEQ=32, D_MODEL=32, HEAD_DIM=16`); the current measured
+  structural smoke is 253,859 SPM cycles vs 252,410 cache cycles (`+0.6%`).
+  The remaining work is to fold graph eval JSON files into final
+  aggregation/plot scripts.
 - Use the completed L2-warming evidence as the mechanism proof: after DMA reads from cacheable DRAM, L2 holds data copies.
 - Compare Tier 2 vs pure cache on real kernels: prove "cacheable + DMA tiling" is never worse than cache (performance floor guarantee).
 
@@ -665,6 +668,7 @@ that should remain cache-only. Need at least 5 representative kernels:
 | residual_add | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
 | softmax | reduction | cache path by default; opt-in row-block SPM accepted by P3 | Done for smoke coverage and Phase 3.5 P4 opt-in evidence; default enablement remains future policy work |
 | layer_norm -> qkv graph | graph placement | activation Tier 2, external weights Tier 3 | Build/verify MVP done; executable SPM/cache gem5 smoke passed |
+| attention_smoke graph | graph placement | realistic QK/PV layouts, Tier 2 activation backbone, selective Tier 3 weights | Done: per-node AOT symbol namespacing, transpose kernel, SPM/cache graph compare, Phase 6 eval summary |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | cache path by default | P2 — diversify workload mix |
 
@@ -705,7 +709,7 @@ Phase 1 (AOT cross-compile) ✅ COMPLETE
               │     └─> Phase 5 (End-to-end transformer inference pipeline)
               └─> Phase 6 (Evaluation — SPM vs Cache) ← Critical path for publication
                     ├─ 6a Cache baseline [Phase 3 matmul/layer_norm baseline ready]
-                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + qkv/attention graph smoke + graph eval JSON done; final aggregation pending]
+                    ├─ 6b Tier 2 workload integration [placement MVP + L2 evidence + qkv/realistic-QK-PV attention graph smoke + graph eval JSON done; final aggregation pending]
                     ├─ 6c Additional workloads [after Phase 3.5/4 pattern support]
                     ├─ 6d Breakdown analysis [built on 6a data]
                     ├─ 6e Area comparison [independent, can start anytime]
