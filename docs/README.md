@@ -188,6 +188,25 @@ ELFs, checks both result gates, then writes `compare_vs_cache.txt`,
 compare path and also writes `phase6_eval.json` plus `phase6_summary.txt` for
 paper-evaluation aggregation.
 
+Phase 4 graph sweep automation lives in `scripts/sweep_p4_graph.py`.  The
+recommended order keeps the roadmap dependency explicit: P4a graph shape sweep
+first, P4b graph-node matmul blocking sweep second, then P4c aggregation.
+
+```bash
+cd workloads
+python3 scripts/sweep_p4_graph.py --phase a --jobs 8
+python3 scripts/sweep_p4_graph.py --phase b --jobs 8
+python3 scripts/sweep_p4_graph.py --phase c
+```
+
+For a single ordered run, use `--phase abc`; the script still runs P4a and P4b
+as separate batches before aggregating.  It generates temporary graph manifests
+under `workloads/graphs/p4_*/` and writes summaries to
+`m5out/graphs/p4_sweep/<sweep-name>/p4abc_summary.{json,csv,md}`.  The default
+shape preset follows the roadmap sweep (`SEQ={32,64}`, `D_MODEL={64,128}`,
+`HEAD_DIM={32,64}`, `FFN_DIM={2x,4x D_MODEL}`), with fixed conservative
+`TRITON_MICRO_M=8` and `TRITON_SPM_WINDOW_K=4` unless overridden.
+
 Each kernel's `experiment.toml` has a base `[params]` block plus named
 `[presets.<name>]` blocks.  `--preset <name>` starts from `[params]`, overlays
 that preset's shape/iteration values, then exports them through the kernel's

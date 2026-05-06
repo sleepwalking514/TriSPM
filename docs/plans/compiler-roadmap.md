@@ -466,6 +466,13 @@ Priority order:
 | P5a selective fusion prototype | Remove high-value materialization only after unfused placement is stable | Start with `layer_norm + qkv` or `activation + ffn_down`; fusion is an optimization layer, not the correctness basis for graph placement. |
 | Later Tier 1/hot-state work | Evaluate persistent small state | Consider only for small, reused attention/softmax state after Tier 2/3 graph placement and fusion evidence are clear. |
 
+P4a/P4b/P4c are automated by `workloads/scripts/sweep_p4_graph.py`.  The phases
+have an evidence dependency, so the script runs them in order when invoked with
+`--phase abc`: shape sweep first, node-blocking sweep second, aggregation last.
+Generated sweep graph manifests are ignored under `workloads/graphs/p4_*/`;
+machine-readable summaries are written under
+`workloads/m5out/graphs/p4_sweep/<sweep-name>/`.
+
 Target interpretation:
 
 - `~1.1x` at one small smoke shape is only a Phase 4 milestone.

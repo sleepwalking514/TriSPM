@@ -22,6 +22,48 @@
 #ifndef GRAPH_BLOCK
 #define GRAPH_BLOCK 16
 #endif
+#ifndef GRAPH_QKV_BLOCK_M
+#define GRAPH_QKV_BLOCK_M 32
+#endif
+#ifndef GRAPH_QKV_BLOCK_N
+#define GRAPH_QKV_BLOCK_N 16
+#endif
+#ifndef GRAPH_QK_BLOCK_M
+#define GRAPH_QK_BLOCK_M 32
+#endif
+#ifndef GRAPH_QK_BLOCK_N
+#define GRAPH_QK_BLOCK_N 16
+#endif
+#ifndef GRAPH_PV_BLOCK_M
+#define GRAPH_PV_BLOCK_M 32
+#endif
+#ifndef GRAPH_PV_BLOCK_N
+#define GRAPH_PV_BLOCK_N 16
+#endif
+#ifndef GRAPH_O_PROJ_BLOCK_M
+#define GRAPH_O_PROJ_BLOCK_M 32
+#endif
+#ifndef GRAPH_O_PROJ_BLOCK_N
+#define GRAPH_O_PROJ_BLOCK_N 16
+#endif
+#ifndef GRAPH_FFN_UP_BLOCK_M
+#define GRAPH_FFN_UP_BLOCK_M 32
+#endif
+#ifndef GRAPH_FFN_UP_BLOCK_N
+#define GRAPH_FFN_UP_BLOCK_N 32
+#endif
+#ifndef GRAPH_FFN_DOWN_BLOCK_M
+#define GRAPH_FFN_DOWN_BLOCK_M 32
+#endif
+#ifndef GRAPH_FFN_DOWN_BLOCK_N
+#define GRAPH_FFN_DOWN_BLOCK_N 16
+#endif
+#ifndef GRAPH_K_TRANSPOSE_BLOCK_M
+#define GRAPH_K_TRANSPOSE_BLOCK_M 16
+#endif
+#ifndef GRAPH_K_TRANSPOSE_BLOCK_N
+#define GRAPH_K_TRANSPOSE_BLOCK_N 16
+#endif
 #ifndef GRAPH_CHECK_RESULT
 #define GRAPH_CHECK_RESULT 1
 #endif
@@ -297,19 +339,19 @@ int main(void)
     m5_reset_stats(0, 0);
 
     layer_norm_launch(GRAPH_SEQ, 1, 1, x, gamma, beta, ln_out);
-    q_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 32, 16), 1, 1, ln_out, wq, q);
-    k_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 32, 16), 1, 1, ln_out, wk, k);
-    v_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 32, 16), 1, 1, ln_out, wv, v);
-    k_transpose_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 16, 16), 1, 1, k, k_t);
-    qk_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_SEQ, 32, 16), 1, 1, q, k_t, scores);
+    q_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, GRAPH_QKV_BLOCK_M, GRAPH_QKV_BLOCK_N), 1, 1, ln_out, wq, q);
+    k_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, GRAPH_QKV_BLOCK_M, GRAPH_QKV_BLOCK_N), 1, 1, ln_out, wk, k);
+    v_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, GRAPH_QKV_BLOCK_M, GRAPH_QKV_BLOCK_N), 1, 1, ln_out, wv, v);
+    k_transpose_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, GRAPH_K_TRANSPOSE_BLOCK_M, GRAPH_K_TRANSPOSE_BLOCK_N), 1, 1, k, k_t);
+    qk_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_SEQ, GRAPH_QK_BLOCK_M, GRAPH_QK_BLOCK_N), 1, 1, q, k_t, scores);
     softmax_launch(GRAPH_SEQ, 1, 1, scores, probs);
-    pv_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 32, 16), 1, 1, probs, v, attn);
-    o_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_D_MODEL, 32, 16), 1, 1, attn, wo, attn_proj);
+    pv_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, GRAPH_PV_BLOCK_M, GRAPH_PV_BLOCK_N), 1, 1, probs, v, attn);
+    o_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_D_MODEL, GRAPH_O_PROJ_BLOCK_M, GRAPH_O_PROJ_BLOCK_N), 1, 1, attn, wo, attn_proj);
     attn_residual_add_launch(MODEL_GRID_X, 1, 1, attn_proj, residual, resid_out);
     ln2_launch(GRAPH_SEQ, 1, 1, resid_out, gamma2, beta2, ln2_out);
-    ffn_up_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_FFN_DIM, 32, 32), 1, 1, ln2_out, w_up, ffn_hidden);
+    ffn_up_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_FFN_DIM, GRAPH_FFN_UP_BLOCK_M, GRAPH_FFN_UP_BLOCK_N), 1, 1, ln2_out, w_up, ffn_hidden);
     ffn_activation_launch(FFN_GRID_X, 1, 1, ffn_hidden, ffn_act);
-    ffn_down_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_D_MODEL, 32, 16), 1, 1, ffn_act, w_down, ffn_out);
+    ffn_down_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_D_MODEL, GRAPH_FFN_DOWN_BLOCK_M, GRAPH_FFN_DOWN_BLOCK_N), 1, 1, ffn_act, w_down, ffn_out);
     final_residual_add_launch(MODEL_GRID_X, 1, 1, ffn_out, resid_out, block_out);
 
     m5_dump_stats(0, 0);
