@@ -375,8 +375,11 @@ Not implemented yet:
 
 Next work:
 
-- Sweep larger `attention_smoke`/decoder-block-facing shapes while keeping
-  producer outputs on the Tier 2 activation backbone.
+- Follow the Phase 4/5 performance ramp in
+  [`compiler-roadmap.md`](compiler-roadmap.md): graph shape sweep, graph-node
+  matmul blocking sweep, eval aggregation, opt-in Softmax row-block/exp-cache
+  graph preset, and then selective fusion.  Keep producer outputs on the Tier 2
+  activation backbone throughout these experiments.
 - Feed graph eval JSON files into broader Phase 6 aggregation/plot scripts.
 
 ### 6.2.1 Transformer-facing kernel harness coverage

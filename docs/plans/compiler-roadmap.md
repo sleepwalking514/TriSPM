@@ -446,6 +446,35 @@ not a compiler requirement. The SPM pipeline (placement, double-buffer, sidecar)
 the fused kernel as a normal single kernel, while graph-level placement handles the
 unfused boundaries that still remain.
 
+### Phase 4/5 Performance Ramp After `attention_smoke`
+
+The current decoder-block-facing `attention_smoke` result is a positive smoke
+point, not a final performance story: `SEQ=32, D_MODEL=32, HEAD_DIM=16,
+FFN_DIM=64` measured 403,038 SPM cycles vs 444,280 cache cycles (`-9.3%`,
+`1.102x`).  The next work should deliberately turn that small graph result into
+a trend before making paper-level claims.
+
+Priority order:
+
+| Step | Goal | Notes |
+|---|---|---|
+| P4a graph shape sweep | Test whether speedup grows with useful GEMM work | Sweep `SEQ={32,64}`, `D_MODEL={64,128}`, `HEAD_DIM={32,64}`, and `FFN_DIM={2x,4x D_MODEL}` where gem5 runtime is still manageable. |
+| P4b graph-node blocking sweep | Avoid judging SPM from smoke-friendly tiles | Sweep matmul blocking for `q/k/v`, `qk`, `pv`, `o_proj`, `ffn_up`, and `ffn_down`; keep elementwise and LayerNorm cache path by default. |
+| P4c graph eval aggregation | Make trends visible | Aggregate `phase6_eval.json` files into a table keyed by graph shape, node blocking, result gate, cycles, speedup, DMA bytes, wait fraction, and cache miss deltas. |
+| P4d opt-in Softmax SPM in graph | Test accepted single-kernel evidence in context | Add an explicit graph preset/env path for Softmax row-block + exp-cache; keep default Softmax cache path until graph evidence justifies policy change. |
+| P4e matmul scheduler tuning | Improve the nodes that dominate the graph | Use existing `microM`/`windowK` controls and queue-depth constraints from `spm-dma-reuse.md`; default stays conservative unless sweeps show a stable win. |
+| P5a selective fusion prototype | Remove high-value materialization only after unfused placement is stable | Start with `layer_norm + qkv` or `activation + ffn_down`; fusion is an optimization layer, not the correctness basis for graph placement. |
+| Later Tier 1/hot-state work | Evaluate persistent small state | Consider only for small, reused attention/softmax state after Tier 2/3 graph placement and fusion evidence are clear. |
+
+Target interpretation:
+
+- `~1.1x` at one small smoke shape is only a Phase 4 milestone.
+- A credible CGO/PACT/ICS story needs stable graph-level speedups across a
+  shape sweep, preferably in the `1.3x-1.8x` band listed in Phase 6a.
+- Any performance claim must keep the same graph source for cache and SPM; SPM
+  may use compiler-controlled placement, DMA scheduling, and opt-in compiler
+  transforms, but not a hand-written SPM-only algorithm.
+
 ### Paper evaluation metrics
 - End-to-end latency: full decoder block, SPM vs cache
 - Per-kernel breakdown: which kernels benefit most from SPM
