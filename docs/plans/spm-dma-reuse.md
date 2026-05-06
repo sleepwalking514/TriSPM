@@ -99,6 +99,8 @@ store finalAcc to C
 descriptor 会触发 queue full，并且当前实现会 drop descriptor。因此第一版以
 4 个 BK tile 为窗口，和硬件队列深度匹配。
 
+注：现已改成32了
+
 `windowK` 已作为 pass option 暴露。短期默认仍应保持 `windowK=4`，把更大
 window 当作显式实验/自动调参候选，而不是无条件默认。
 
