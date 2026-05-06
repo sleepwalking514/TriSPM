@@ -309,7 +309,7 @@ Verification:
 ### 6.2 Graph-level placement for transformer pipeline (P0)
 
 Status: **build/verify MVP landed (2026-05-02); first executable graph smoke,
-realistic-QK/PV attention-facing smoke, graph-vs-cache reporting, and Phase 6
+decoder-block-facing `attention_smoke`, graph-vs-cache reporting, and Phase 6
 graph-eval summary landed (2026-05-06)**.
 
 Implemented:
@@ -350,17 +350,20 @@ Implemented:
 - `workloads/kernels/transpose/` adds a cache-path transpose kernel used by the
   attention fixture to materialize `K^T`.
 - `workloads/graphs/attention_smoke/graph.toml` now extends graph coverage
-  toward attention schedules with realistic QK/PV layouts:
-  `layer_norm -> q/k/v -> k_transpose -> qk -> softmax -> pv -> residual_add
-  -> activation`.  The smoke shape is `SEQ=32, D_MODEL=32, HEAD_DIM=16`, so
-  `qk` is `[32,16] x [16,32]` and `pv` is `[32,32] x [32,16]` rather than the
-  previous square placeholder.
+  from attention schedules with realistic QK/PV layouts into a
+  decoder-block-facing subgraph:
+  `layer_norm -> q/k/v -> k_transpose -> qk -> softmax -> pv -> o_proj ->
+  residual_add -> layer_norm -> ffn_up -> activation -> ffn_down ->
+  residual_add`.  The smoke shape is `SEQ=32, D_MODEL=32, HEAD_DIM=16,
+  FFN_DIM=64`, so `qk` is `[32,16] x [16,32]`, `pv` is `[32,32] x [32,16]`,
+  and the tail adds output projection plus FFN up/down matmuls.
 - `workloads/scripts/phase6_graph_eval.py` consumes the graph manifest,
   invokes the graph compare path, and writes `phase6_eval.json` plus
-  `phase6_summary.txt` alongside the graph report.  The realistic-QK/PV
-  `attention_smoke` run passed both SPM/cache result gates; at this small smoke
-  shape SPM measured 253,859 cycles vs 252,410 cache cycles (`+0.6%`), so this
-  is structural/evaluation coverage rather than a performance headline.
+  `phase6_summary.txt` alongside the graph report.  The decoder-block-facing
+  `attention_smoke` run passed both SPM/cache result gates and measured
+  403,038 SPM cycles vs 444,280 cache cycles (`-9.3%`, `1.102x`).  This is a
+  positive Phase 4 small-graph milestone, not a completed Phase 5 transformer
+  block or final Phase 6 evaluation.
 
 Not implemented yet:
 
@@ -372,10 +375,9 @@ Not implemented yet:
 
 Next work:
 
+- Sweep larger `attention_smoke`/decoder-block-facing shapes while keeping
+  producer outputs on the Tier 2 activation backbone.
 - Feed graph eval JSON files into broader Phase 6 aggregation/plot scripts.
-- Extend from `attention_smoke` toward a fuller decoder-block fixture with
-  output projection and FFN nodes while keeping producer outputs on the Tier 2
-  activation backbone.
 
 ### 6.2.1 Transformer-facing kernel harness coverage
 - [🆗] 第一版已完成（2026-05-02）：`activation`（SiLU）、

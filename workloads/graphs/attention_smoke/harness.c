@@ -16,6 +16,9 @@
 #ifndef GRAPH_HEAD_DIM
 #define GRAPH_HEAD_DIM 16
 #endif
+#ifndef GRAPH_FFN_DIM
+#define GRAPH_FFN_DIM 64
+#endif
 #ifndef GRAPH_BLOCK
 #define GRAPH_BLOCK 16
 #endif
@@ -26,10 +29,14 @@
 #define GRAPH_FLUSH_BEFORE_ROI 1
 #endif
 
-#define LN_ELEMS (GRAPH_SEQ * GRAPH_D_MODEL)
+#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
+#define MODEL_ELEMS (GRAPH_SEQ * GRAPH_D_MODEL)
 #define QKV_ELEMS (GRAPH_SEQ * GRAPH_HEAD_DIM)
 #define SCORE_ELEMS (GRAPH_SEQ * GRAPH_SEQ)
-#define ELEMENTWISE_GRID_X ((QKV_ELEMS + GRAPH_BLOCK - 1) / GRAPH_BLOCK)
+#define FFN_ELEMS (GRAPH_SEQ * GRAPH_FFN_DIM)
+#define MODEL_GRID_X CEIL_DIV(MODEL_ELEMS, GRAPH_BLOCK)
+#define FFN_GRID_X CEIL_DIV(FFN_ELEMS, GRAPH_BLOCK)
+#define MATMUL_GRID(m, n, bm, bn) (CEIL_DIV((m), (bm)) * CEIL_DIV((n), (bn)))
 
 static void init_matrix(float *x, int rows, int cols, int salt)
 {
@@ -37,11 +44,11 @@ static void init_matrix(float *x, int rows, int cols, int salt)
         x[i] = (float)(((i * 7 + salt * 11) % 31) - 15) * 0.05f;
 }
 
-static void init_layer_norm_params(float *gamma, float *beta)
+static void init_layer_norm_params(float *gamma, float *beta, int cols, int salt)
 {
-    for (int j = 0; j < GRAPH_D_MODEL; j++) {
-        gamma[j] = 0.75f + (float)(j % 7) * 0.05f;
-        beta[j] = (float)((j % 5) - 2) * 0.025f;
+    for (int j = 0; j < cols; j++) {
+        gamma[j] = 0.75f + (float)((j + salt) % 7) * 0.05f;
+        beta[j] = (float)(((j + salt) % 5) - 2) * 0.025f;
     }
 }
 
@@ -110,15 +117,16 @@ static void reference_softmax(const float *x, float *out)
     }
 }
 
-static void reference_residual_add(const float *x, const float *residual, float *out)
+static void reference_residual_add(
+    const float *x, const float *residual, float *out, int elems)
 {
-    for (int i = 0; i < QKV_ELEMS; i++)
+    for (int i = 0; i < elems; i++)
         out[i] = x[i] + residual[i];
 }
 
-static void reference_activation(const float *x, float *out)
+static void reference_activation(const float *x, float *out, int elems)
 {
-    for (int i = 0; i < QKV_ELEMS; i++)
+    for (int i = 0; i < elems; i++)
         out[i] = x[i] / (1.0f + expf(-x[i]));
 }
 
@@ -148,35 +156,52 @@ static void free_all_nodes(void)
     qk_free_all();
     softmax_free_all();
     pv_free_all();
-    residual_add_free_all();
-    activation_free_all();
+    o_proj_free_all();
+    attn_residual_add_free_all();
+    ln2_free_all();
+    ffn_up_free_all();
+    ffn_activation_free_all();
+    ffn_down_free_all();
+    final_residual_add_free_all();
 }
 
 int main(void)
 {
-    printf("graph attention_smoke: SEQ=%d D_MODEL=%d HEAD_DIM=%d BLOCK=%d check=%d flush=%d\n",
-           GRAPH_SEQ, GRAPH_D_MODEL, GRAPH_HEAD_DIM, GRAPH_BLOCK,
+    printf("graph attention_smoke: SEQ=%d D_MODEL=%d HEAD_DIM=%d FFN_DIM=%d BLOCK=%d check=%d flush=%d\n",
+           GRAPH_SEQ, GRAPH_D_MODEL, GRAPH_HEAD_DIM, GRAPH_FFN_DIM, GRAPH_BLOCK,
            GRAPH_CHECK_RESULT, GRAPH_FLUSH_BEFORE_ROI);
 
-    const size_t ln_bytes = (size_t)LN_ELEMS * sizeof(float);
+    const size_t model_bytes = (size_t)MODEL_ELEMS * sizeof(float);
     const size_t qkv_bytes = (size_t)QKV_ELEMS * sizeof(float);
     const size_t score_bytes = (size_t)SCORE_ELEMS * sizeof(float);
+    const size_t ffn_bytes = (size_t)FFN_ELEMS * sizeof(float);
     const size_t ln_param_bytes = (size_t)GRAPH_D_MODEL * sizeof(float);
     const size_t qkv_weight_bytes =
         (size_t)GRAPH_D_MODEL * (size_t)GRAPH_HEAD_DIM * sizeof(float);
+    const size_t o_weight_bytes =
+        (size_t)GRAPH_HEAD_DIM * (size_t)GRAPH_D_MODEL * sizeof(float);
+    const size_t ffn_up_weight_bytes =
+        (size_t)GRAPH_D_MODEL * (size_t)GRAPH_FFN_DIM * sizeof(float);
+    const size_t ffn_down_weight_bytes =
+        (size_t)GRAPH_FFN_DIM * (size_t)GRAPH_D_MODEL * sizeof(float);
 
-    float *x_shadow = (float *)malloc(ln_bytes);
+    float *x_shadow = (float *)malloc(model_bytes);
     float *gamma_shadow = (float *)malloc(ln_param_bytes);
     float *beta_shadow = (float *)malloc(ln_param_bytes);
     float *wq_shadow = (float *)malloc(qkv_weight_bytes);
     float *wk_shadow = (float *)malloc(qkv_weight_bytes);
     float *wv_shadow = (float *)malloc(qkv_weight_bytes);
-    float *residual_shadow = (float *)malloc(qkv_bytes);
+    float *wo_shadow = (float *)malloc(o_weight_bytes);
+    float *residual_shadow = (float *)malloc(model_bytes);
+    float *gamma2_shadow = (float *)malloc(ln_param_bytes);
+    float *beta2_shadow = (float *)malloc(ln_param_bytes);
+    float *w_up_shadow = (float *)malloc(ffn_up_weight_bytes);
+    float *w_down_shadow = (float *)malloc(ffn_down_weight_bytes);
 
-    float *x = (float *)layer_norm_alloc(0, ln_bytes);
+    float *x = (float *)layer_norm_alloc(0, model_bytes);
     float *gamma = (float *)layer_norm_alloc(1, ln_param_bytes);
     float *beta = (float *)layer_norm_alloc(2, ln_param_bytes);
-    float *ln_out = (float *)layer_norm_alloc(3, ln_bytes);
+    float *ln_out = (float *)layer_norm_alloc(3, model_bytes);
     float *wq = (float *)q_proj_alloc(1, qkv_weight_bytes);
     float *wk = (float *)k_proj_alloc(1, qkv_weight_bytes);
     float *wv = (float *)v_proj_alloc(1, qkv_weight_bytes);
@@ -187,15 +212,27 @@ int main(void)
     float *scores = (float *)qk_alloc(2, score_bytes);
     float *probs = (float *)softmax_alloc(1, score_bytes);
     float *attn = (float *)pv_alloc(2, qkv_bytes);
-    float *residual = (float *)residual_add_alloc(1, qkv_bytes);
-    float *resid_out = (float *)residual_add_alloc(2, qkv_bytes);
-    float *act_out = (float *)activation_alloc(1, qkv_bytes);
+    float *wo = (float *)o_proj_alloc(1, o_weight_bytes);
+    float *attn_proj = (float *)o_proj_alloc(2, model_bytes);
+    float *residual = (float *)attn_residual_add_alloc(1, model_bytes);
+    float *resid_out = (float *)attn_residual_add_alloc(2, model_bytes);
+    float *gamma2 = (float *)ln2_alloc(1, ln_param_bytes);
+    float *beta2 = (float *)ln2_alloc(2, ln_param_bytes);
+    float *ln2_out = (float *)ln2_alloc(3, model_bytes);
+    float *w_up = (float *)ffn_up_alloc(1, ffn_up_weight_bytes);
+    float *ffn_hidden = (float *)ffn_up_alloc(2, ffn_bytes);
+    float *ffn_act = (float *)ffn_activation_alloc(1, ffn_bytes);
+    float *w_down = (float *)ffn_down_alloc(1, ffn_down_weight_bytes);
+    float *ffn_out = (float *)ffn_down_alloc(2, model_bytes);
+    float *block_out = (float *)final_residual_add_alloc(2, model_bytes);
 
     if (!x_shadow || !gamma_shadow || !beta_shadow || !wq_shadow ||
-        !wk_shadow || !wv_shadow || !residual_shadow || !x || !gamma ||
-        !beta || !ln_out || !wq || !wk || !wv || !q || !k || !v ||
-        !k_t || !scores || !probs || !attn || !residual || !resid_out ||
-        !act_out) {
+        !wk_shadow || !wv_shadow || !wo_shadow || !residual_shadow ||
+        !gamma2_shadow || !beta2_shadow || !w_up_shadow || !w_down_shadow ||
+        !x || !gamma || !beta || !ln_out || !wq || !wk || !wv || !q || !k || !v ||
+        !k_t || !scores || !probs || !attn || !wo || !attn_proj || !residual ||
+        !resid_out || !gamma2 || !beta2 || !ln2_out || !w_up || !ffn_hidden ||
+        !ffn_act || !w_down || !ffn_out || !block_out) {
         fprintf(stderr, "malloc failed\n");
         free_all_nodes();
         free(x_shadow);
@@ -204,27 +241,41 @@ int main(void)
         free(wq_shadow);
         free(wk_shadow);
         free(wv_shadow);
+        free(wo_shadow);
         free(residual_shadow);
+        free(gamma2_shadow);
+        free(beta2_shadow);
+        free(w_up_shadow);
+        free(w_down_shadow);
         return 1;
     }
 
     init_matrix(x_shadow, GRAPH_SEQ, GRAPH_D_MODEL, 1);
-    init_layer_norm_params(gamma_shadow, beta_shadow);
+    init_layer_norm_params(gamma_shadow, beta_shadow, GRAPH_D_MODEL, 0);
     init_matrix(wq_shadow, GRAPH_D_MODEL, GRAPH_HEAD_DIM, 2);
     init_matrix(wk_shadow, GRAPH_D_MODEL, GRAPH_HEAD_DIM, 3);
     init_matrix(wv_shadow, GRAPH_D_MODEL, GRAPH_HEAD_DIM, 4);
-    init_matrix(residual_shadow, GRAPH_SEQ, GRAPH_HEAD_DIM, 5);
+    init_matrix(wo_shadow, GRAPH_HEAD_DIM, GRAPH_D_MODEL, 5);
+    init_matrix(residual_shadow, GRAPH_SEQ, GRAPH_D_MODEL, 6);
+    init_layer_norm_params(gamma2_shadow, beta2_shadow, GRAPH_D_MODEL, 3);
+    init_matrix(w_up_shadow, GRAPH_D_MODEL, GRAPH_FFN_DIM, 7);
+    init_matrix(w_down_shadow, GRAPH_FFN_DIM, GRAPH_D_MODEL, 8);
 
     flush_caches();
-    publish_input(x, x_shadow, ln_bytes);
+    publish_input(x, x_shadow, model_bytes);
     publish_input(gamma, gamma_shadow, ln_param_bytes);
     publish_input(beta, beta_shadow, ln_param_bytes);
     publish_input(wq, wq_shadow, qkv_weight_bytes);
     publish_input(wk, wk_shadow, qkv_weight_bytes);
     publish_input(wv, wv_shadow, qkv_weight_bytes);
-    publish_input(residual, residual_shadow, qkv_bytes);
+    publish_input(wo, wo_shadow, o_weight_bytes);
+    publish_input(residual, residual_shadow, model_bytes);
+    publish_input(gamma2, gamma2_shadow, ln_param_bytes);
+    publish_input(beta2, beta2_shadow, ln_param_bytes);
+    publish_input(w_up, w_up_shadow, ffn_up_weight_bytes);
+    publish_input(w_down, w_down_shadow, ffn_down_weight_bytes);
 
-    memset(ln_out, 0, ln_bytes);
+    memset(ln_out, 0, model_bytes);
     memset(q, 0, qkv_bytes);
     memset(k, 0, qkv_bytes);
     memset(v, 0, qkv_bytes);
@@ -232,8 +283,13 @@ int main(void)
     memset(scores, 0, score_bytes);
     memset(probs, 0, score_bytes);
     memset(attn, 0, qkv_bytes);
-    memset(resid_out, 0, qkv_bytes);
-    memset(act_out, 0, qkv_bytes);
+    memset(attn_proj, 0, model_bytes);
+    memset(resid_out, 0, model_bytes);
+    memset(ln2_out, 0, model_bytes);
+    memset(ffn_hidden, 0, ffn_bytes);
+    memset(ffn_act, 0, ffn_bytes);
+    memset(ffn_out, 0, model_bytes);
+    memset(block_out, 0, model_bytes);
 
     if (GRAPH_FLUSH_BEFORE_ROI)
         flush_caches();
@@ -241,21 +297,26 @@ int main(void)
     m5_reset_stats(0, 0);
 
     layer_norm_launch(GRAPH_SEQ, 1, 1, x, gamma, beta, ln_out);
-    q_proj_launch(1, 1, 1, ln_out, wq, q);
-    k_proj_launch(1, 1, 1, ln_out, wk, k);
-    v_proj_launch(1, 1, 1, ln_out, wv, v);
-    k_transpose_launch(2, 1, 1, k, k_t);
-    qk_launch(2, 1, 1, q, k_t, scores);
+    q_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 32, 16), 1, 1, ln_out, wq, q);
+    k_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 32, 16), 1, 1, ln_out, wk, k);
+    v_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 32, 16), 1, 1, ln_out, wv, v);
+    k_transpose_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 16, 16), 1, 1, k, k_t);
+    qk_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_SEQ, 32, 16), 1, 1, q, k_t, scores);
     softmax_launch(GRAPH_SEQ, 1, 1, scores, probs);
-    pv_launch(1, 1, 1, probs, v, attn);
-    residual_add_launch(ELEMENTWISE_GRID_X, 1, 1, attn, residual, resid_out);
-    activation_launch(ELEMENTWISE_GRID_X, 1, 1, resid_out, act_out);
+    pv_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_HEAD_DIM, 32, 16), 1, 1, probs, v, attn);
+    o_proj_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_D_MODEL, 32, 16), 1, 1, attn, wo, attn_proj);
+    attn_residual_add_launch(MODEL_GRID_X, 1, 1, attn_proj, residual, resid_out);
+    ln2_launch(GRAPH_SEQ, 1, 1, resid_out, gamma2, beta2, ln2_out);
+    ffn_up_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_FFN_DIM, 32, 32), 1, 1, ln2_out, w_up, ffn_hidden);
+    ffn_activation_launch(FFN_GRID_X, 1, 1, ffn_hidden, ffn_act);
+    ffn_down_launch(MATMUL_GRID(GRAPH_SEQ, GRAPH_D_MODEL, 32, 16), 1, 1, ffn_act, w_down, ffn_out);
+    final_residual_add_launch(MODEL_GRID_X, 1, 1, ffn_out, resid_out, block_out);
 
     m5_dump_stats(0, 0);
 
     int errors = 0;
     if (GRAPH_CHECK_RESULT) {
-        float *ln_ref = (float *)malloc(ln_bytes);
+        float *ln_ref = (float *)malloc(model_bytes);
         float *q_ref = (float *)malloc(qkv_bytes);
         float *k_ref = (float *)malloc(qkv_bytes);
         float *v_ref = (float *)malloc(qkv_bytes);
@@ -263,10 +324,17 @@ int main(void)
         float *scores_ref = (float *)malloc(score_bytes);
         float *probs_ref = (float *)malloc(score_bytes);
         float *attn_ref = (float *)malloc(qkv_bytes);
-        float *resid_ref = (float *)malloc(qkv_bytes);
-        float *act_ref = (float *)malloc(qkv_bytes);
+        float *attn_proj_ref = (float *)malloc(model_bytes);
+        float *resid_ref = (float *)malloc(model_bytes);
+        float *ln2_ref = (float *)malloc(model_bytes);
+        float *ffn_hidden_ref = (float *)malloc(ffn_bytes);
+        float *ffn_act_ref = (float *)malloc(ffn_bytes);
+        float *ffn_out_ref = (float *)malloc(model_bytes);
+        float *block_ref = (float *)malloc(model_bytes);
         if (!ln_ref || !q_ref || !k_ref || !v_ref || !k_t_ref ||
-            !scores_ref || !probs_ref || !attn_ref || !resid_ref || !act_ref) {
+            !scores_ref || !probs_ref || !attn_ref || !attn_proj_ref ||
+            !resid_ref || !ln2_ref || !ffn_hidden_ref || !ffn_act_ref ||
+            !ffn_out_ref || !block_ref) {
             fprintf(stderr, "malloc failed\n");
             free(ln_ref);
             free(q_ref);
@@ -276,8 +344,13 @@ int main(void)
             free(scores_ref);
             free(probs_ref);
             free(attn_ref);
+            free(attn_proj_ref);
             free(resid_ref);
-            free(act_ref);
+            free(ln2_ref);
+            free(ffn_hidden_ref);
+            free(ffn_act_ref);
+            free(ffn_out_ref);
+            free(block_ref);
             free_all_nodes();
             free(x_shadow);
             free(gamma_shadow);
@@ -285,7 +358,12 @@ int main(void)
             free(wq_shadow);
             free(wk_shadow);
             free(wv_shadow);
+            free(wo_shadow);
             free(residual_shadow);
+            free(gamma2_shadow);
+            free(beta2_shadow);
+            free(w_up_shadow);
+            free(w_down_shadow);
             return 1;
         }
 
@@ -297,10 +375,15 @@ int main(void)
         reference_matmul(q_ref, k_t_ref, scores_ref, GRAPH_SEQ, GRAPH_SEQ, GRAPH_HEAD_DIM);
         reference_softmax(scores_ref, probs_ref);
         reference_matmul(probs_ref, v_ref, attn_ref, GRAPH_SEQ, GRAPH_HEAD_DIM, GRAPH_SEQ);
-        reference_residual_add(attn_ref, residual_shadow, resid_ref);
-        reference_activation(resid_ref, act_ref);
+        reference_matmul(attn_ref, wo_shadow, attn_proj_ref, GRAPH_SEQ, GRAPH_D_MODEL, GRAPH_HEAD_DIM);
+        reference_residual_add(attn_proj_ref, residual_shadow, resid_ref, MODEL_ELEMS);
+        reference_layer_norm(resid_ref, gamma2_shadow, beta2_shadow, ln2_ref);
+        reference_matmul(ln2_ref, w_up_shadow, ffn_hidden_ref, GRAPH_SEQ, GRAPH_FFN_DIM, GRAPH_D_MODEL);
+        reference_activation(ffn_hidden_ref, ffn_act_ref, FFN_ELEMS);
+        reference_matmul(ffn_act_ref, w_down_shadow, ffn_out_ref, GRAPH_SEQ, GRAPH_D_MODEL, GRAPH_FFN_DIM);
+        reference_residual_add(ffn_out_ref, resid_ref, block_ref, MODEL_ELEMS);
 
-        errors += check_tensor("act_out", act_out, act_ref, QKV_ELEMS, 1e-2f);
+        errors += check_tensor("block_out", block_out, block_ref, MODEL_ELEMS, 1e-1f);
         if (errors == 0)
             printf("PASS: graph outputs correct\n");
         else
@@ -314,8 +397,13 @@ int main(void)
         free(scores_ref);
         free(probs_ref);
         free(attn_ref);
+        free(attn_proj_ref);
         free(resid_ref);
-        free(act_ref);
+        free(ln2_ref);
+        free(ffn_hidden_ref);
+        free(ffn_act_ref);
+        free(ffn_out_ref);
+        free(block_ref);
     } else {
         printf("SKIP: graph result check disabled\n");
     }
@@ -327,7 +415,12 @@ int main(void)
     free(wq_shadow);
     free(wk_shadow);
     free(wv_shadow);
+    free(wo_shadow);
     free(residual_shadow);
+    free(gamma2_shadow);
+    free(beta2_shadow);
+    free(w_up_shadow);
+    free(w_down_shadow);
 
     return (errors > 0) ? 1 : 0;
 }

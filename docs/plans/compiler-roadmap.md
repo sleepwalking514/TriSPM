@@ -572,14 +572,16 @@ The three-tier placement policy is the paper's most valuable insight. The Tier 2
   `workloads/scripts/graph_placement.py` reads graph tensor-edge metadata,
   forces intermediate activations and producer outputs to Tier 2, and reserves
   Tier 3 for external read-only DMA-only tensors.  The first executable
-  `layer_norm -> q/k/v` graph harness, the attention-facing `attention_smoke`
-  harness, graph-vs-cache report mode, and Phase 6 graph-eval JSON/summary
-  artifacts are now in place.  `attention_smoke` now uses per-node AOT symbol
-  namespacing plus a cache-path transpose kernel to link realistic QK/PV
-  layouts in one ELF (`SEQ=32, D_MODEL=32, HEAD_DIM=16`); the current measured
-  structural smoke is 253,859 SPM cycles vs 252,410 cache cycles (`+0.6%`).
-  The remaining work is to fold graph eval JSON files into final
-  aggregation/plot scripts.
+  `layer_norm -> q/k/v` graph harness, the decoder-block-facing
+  `attention_smoke` harness, graph-vs-cache report mode, and Phase 6
+  graph-eval JSON/summary artifacts are now in place.  `attention_smoke` uses
+  per-node AOT symbol namespacing plus a cache-path transpose kernel to link
+  realistic QK/PV layouts, output projection, and an FFN tail in one ELF
+  (`SEQ=32, D_MODEL=32, HEAD_DIM=16, FFN_DIM=64`).  The current small-graph
+  result is positive: 403,038 SPM cycles vs 444,280 cache cycles (`-9.3%`,
+  `1.102x`).  This is still a Phase 4 small-graph milestone; Phase 5 needs
+  broader decoder-block coverage and Phase 6 still needs final aggregation and
+  plots.
 - Use the completed L2-warming evidence as the mechanism proof: after DMA reads from cacheable DRAM, L2 holds data copies.
 - Compare Tier 2 vs pure cache on real kernels: prove "cacheable + DMA tiling" is never worse than cache (performance floor guarantee).
 
@@ -668,7 +670,7 @@ that should remain cache-only. Need at least 5 representative kernels:
 | residual_add | elementwise | cache path expected | Done: workload + verify + flushed ROI smoke compare |
 | softmax | reduction | cache path by default; opt-in row-block SPM accepted by P3 | Done for smoke coverage and Phase 3.5 P4 opt-in evidence; default enablement remains future policy work |
 | layer_norm -> qkv graph | graph placement | activation Tier 2, external weights Tier 3 | Build/verify MVP done; executable SPM/cache gem5 smoke passed |
-| attention_smoke graph | graph placement | realistic QK/PV layouts, Tier 2 activation backbone, selective Tier 3 weights | Done: per-node AOT symbol namespacing, transpose kernel, SPM/cache graph compare, Phase 6 eval summary |
+| attention_smoke graph | graph placement | realistic QK/PV layouts plus output projection and FFN tail; Tier 2 activation backbone, selective Tier 3 weights | Done: per-node AOT symbol namespacing, transpose kernel, SPM/cache graph compare, Phase 6 eval summary; current small graph is 403,038 SPM vs 444,280 cache cycles (`-9.3%`) |
 | flash_attention | multi-tensor | Q pinned + K/V double-buffer | P1 — depends on Phase 4 |
 | cross_entropy | reduction | cache path by default | P2 — diversify workload mix |
 

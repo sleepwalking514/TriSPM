@@ -1,6 +1,6 @@
 [graph]
 name = "attention_smoke"
-description = "Attention-facing graph smoke with realistic QK/PV layouts: layer_norm -> q/k/v -> k_transpose -> qk -> softmax -> pv -> residual_add -> activation."
+description = "Decoder-block-facing graph smoke with realistic QK/PV layouts plus output projection and FFN tail: layer_norm -> q/k/v -> k_transpose -> qk -> softmax -> pv -> o_proj -> residual_add -> layer_norm -> ffn_up -> activation -> ffn_down -> residual_add."
 
 [harness]
 source = "harness.c"
@@ -9,6 +9,7 @@ source = "harness.c"
 SEQ = 32
 D_MODEL = 32
 HEAD_DIM = 16
+FFN_DIM = 64
 BLOCK = 16
 CHECK_RESULT = 1
 FLUSH_BEFORE_ROI = 1
@@ -18,6 +19,7 @@ c_macros = [
     "GRAPH_SEQ={SEQ}",
     "GRAPH_D_MODEL={D_MODEL}",
     "GRAPH_HEAD_DIM={HEAD_DIM}",
+    "GRAPH_FFN_DIM={FFN_DIM}",
     "GRAPH_BLOCK={BLOCK}",
     "GRAPH_CHECK_RESULT={CHECK_RESULT}",
     "GRAPH_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
@@ -100,23 +102,85 @@ note = "Shape [SEQ, SEQ]."
 [tensors.attn]
 kind = "intermediate"
 producer = "pv"
-consumers = ["residual_add"]
+consumers = ["o_proj"]
 note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.wo]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [HEAD_DIM, D_MODEL]."
+
+[tensors.attn_proj]
+kind = "intermediate"
+producer = "o_proj"
+consumers = ["attn_residual_add"]
+note = "Shape [SEQ, D_MODEL]."
 
 [tensors.residual]
 kind = "external_input"
 read_only = true
 dma_only = false
-note = "Shape [SEQ, HEAD_DIM]."
+note = "Shape [SEQ, D_MODEL]."
 
 [tensors.resid_out]
 kind = "intermediate"
-producer = "residual_add"
-consumers = ["activation"]
+producer = "attn_residual_add"
+consumers = ["ln2", "final_residual_add"]
+note = "Shape [SEQ, D_MODEL]."
 
-[tensors.act_out]
+[tensors.gamma2]
+kind = "external_weight"
+read_only = true
+dma_only = false
+note = "Second LayerNorm scale; reduction/scalar-style access stays cacheable."
+
+[tensors.beta2]
+kind = "external_weight"
+read_only = true
+dma_only = false
+note = "Second LayerNorm bias; reduction/scalar-style access stays cacheable."
+
+[tensors.ln2_out]
+kind = "intermediate"
+producer = "ln2"
+consumers = ["ffn_up"]
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.w_up]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [D_MODEL, FFN_DIM]."
+
+[tensors.ffn_hidden]
+kind = "intermediate"
+producer = "ffn_up"
+consumers = ["ffn_activation"]
+note = "Shape [SEQ, FFN_DIM]."
+
+[tensors.ffn_act]
+kind = "intermediate"
+producer = "ffn_activation"
+consumers = ["ffn_down"]
+note = "Shape [SEQ, FFN_DIM]."
+
+[tensors.w_down]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [FFN_DIM, D_MODEL]."
+
+[tensors.ffn_out]
+kind = "intermediate"
+producer = "ffn_down"
+consumers = ["final_residual_add"]
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.block_out]
 kind = "graph_output"
-producer = "activation"
+producer = "final_residual_add"
+note = "Shape [SEQ, D_MODEL]."
 
 [nodes.layer_norm]
 kernel = "layer_norm"
@@ -225,22 +289,85 @@ BLOCK_SIZE_N = 16
 BLOCK_SIZE_K = 32
 CHECK_RESULT = 0
 
-[nodes.residual_add]
-kernel = "residual_add"
-args = ["attn", "residual", "resid_out"]
-tag = "graph/attention_smoke/residual_add"
+[nodes.o_proj]
+kernel = "matmul"
+args = ["attn", "wo", "attn_proj"]
+tag = "graph/attention_smoke/o_proj"
 
-[nodes.residual_add.params]
-SIZE = 512
+[nodes.o_proj.params]
+M = 32
+N = 32
+K = 16
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 16
+CHECK_RESULT = 0
+
+[nodes.attn_residual_add]
+kernel = "residual_add"
+args = ["attn_proj", "residual", "resid_out"]
+tag = "graph/attention_smoke/attn_residual_add"
+
+[nodes.attn_residual_add.params]
+SIZE = 1024
 BLOCK_SIZE = 16
 CHECK_RESULT = 0
 
-[nodes.activation]
-kernel = "activation"
-args = ["resid_out", "act_out"]
-tag = "graph/attention_smoke/activation"
+[nodes.ln2]
+kernel = "layer_norm"
+args = ["resid_out", "gamma2", "beta2", "ln2_out"]
+tag = "graph/attention_smoke/ln2"
 
-[nodes.activation.params]
-SIZE = 512
+[nodes.ln2.params]
+M = 32
+N = 32
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+
+[nodes.ffn_up]
+kernel = "matmul"
+args = ["ln2_out", "w_up", "ffn_hidden"]
+tag = "graph/attention_smoke/ffn_up"
+
+[nodes.ffn_up.params]
+M = 32
+N = 64
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.ffn_activation]
+kernel = "activation"
+args = ["ffn_hidden", "ffn_act"]
+tag = "graph/attention_smoke/ffn_activation"
+
+[nodes.ffn_activation.params]
+SIZE = 2048
+BLOCK_SIZE = 16
+CHECK_RESULT = 0
+
+[nodes.ffn_down]
+kernel = "matmul"
+args = ["ffn_act", "w_down", "ffn_out"]
+tag = "graph/attention_smoke/ffn_down"
+
+[nodes.ffn_down.params]
+M = 32
+N = 32
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.final_residual_add]
+kernel = "residual_add"
+args = ["ffn_out", "resid_out", "block_out"]
+tag = "graph/attention_smoke/final_residual_add"
+
+[nodes.final_residual_add.params]
+SIZE = 1024
 BLOCK_SIZE = 16
 CHECK_RESULT = 0
