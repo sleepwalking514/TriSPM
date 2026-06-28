@@ -1,0 +1,190 @@
+[kernel]
+name = "layer_norm"
+env_prefix = ""
+tag_template = "{M}x{N}/bn{BLOCK_N}-spmrb{SPM_ROW_BLOCK}-spmrg{SPM_ROW_GROUP_BLOCKS}"
+expect_spm = true
+
+[kernel.verify]
+expect_dma = true
+expect_promotion_source = "LayerNorm x row block"
+expect_promotion_reason = "accepted_block_resident_fill_first"
+expect_residency_plan = "LayerNorm x row block"
+
+[params]
+M = 512
+N = 512
+BLOCK_N = 8
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[build]
+c_macros = [
+    "M={M}",
+    "N={N}",
+    "BLOCK_N={BLOCK_N}",
+    "CHECK_RESULT={CHECK_RESULT}",
+    "LAYERNORM_FLUSH_BEFORE_ROI={LAYERNORM_FLUSH_BEFORE_ROI}",
+    "LAYERNORM_SPM_ROW_BLOCK={SPM_ROW_BLOCK}",
+    "LAYERNORM_SPM_ROW_GROUP_BLOCKS={SPM_ROW_GROUP_BLOCKS}",
+    "LAYERNORM_SPM_INTERNAL_ROW_BLOCK={SPM_INTERNAL_ROW_BLOCK}",
+]
+
+[mode_params.cache]
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[presets.smoke]
+M = 256
+N = 256
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[presets.small]
+M = 32
+N = 1024
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[presets.large]
+M = 512
+N = 512
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[presets.row-resident]
+M = 512
+N = 1024
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[preset_env.row-resident]
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY = "0"
+TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS = "fill_on_first_pass"
+TRITON_SPM_LAYERNORM_INTERNAL_ROW_BLOCK = "0"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[presets.centered-cache]
+M = 512
+N = 1024
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[preset_env.centered-cache]
+# Experimental/negative-evidence only. Caching x - mean is correct, but on the
+# current LayerNorm sizes it adds SPM traffic without reducing DRAM traffic, so
+# it loses to the cache baseline and should not be used as the default path.
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY = "0"
+TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS = "fill_on_first_pass"
+TRITON_SPM_LAYERNORM_INTERNAL_ROW_BLOCK = "0"
+TRITON_SPM_LAYERNORM_CACHE_CENTERED = "1"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[presets.producer-store]
+M = 512
+N = 1024
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[preset_env.producer-store]
+# Ablation/negative-evidence only. This path is intentionally kept for
+# profitability evidence and coverage; do not use it as a recommended schedule.
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY = "0"
+TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS = "producer_store"
+TRITON_SPM_LAYERNORM_INTERNAL_ROW_BLOCK = "0"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[presets.dma-prefetch]
+M = 512
+N = 1024
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[preset_env.dma-prefetch]
+# Ablation/negative-evidence only. Chunk-DMA emits many tiny descriptors/waits
+# for LayerNorm and is not a recommended schedule.
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY = "0"
+TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS = "dma_prefetch"
+TRITON_SPM_LAYERNORM_INTERNAL_ROW_BLOCK = "0"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[presets.row-block-dma]
+M = 512
+N = 1024
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[preset_env.row-block-dma]
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY = "1"
+TRITON_SPM_ROW_RESIDENT_PRODUCER_PASS = "row_block_dma"
+TRITON_SPM_ROW_RESIDENT_MAX_BYTES = "65536"
+TRITON_SPM_LAYERNORM_INTERNAL_ROW_BLOCK = "1"
+TRITON_SPM_LAYERNORM_ROW_BLOCK = "4"
+TRITON_SPM_LAYERNORM_ROW_GROUP_BLOCKS = "8"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[presets.profitability-small]
+M = 32
+N = 64
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[preset_env.profitability-small]
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY = "1"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[presets.profitability-large]
+M = 512
+N = 1024
+CHECK_RESULT = 1
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[preset_env.profitability-large]
+TRITON_ENABLE_SPM_ROW_RESIDENT_REDUCTIONS = "1"
+TRITON_ENABLE_SPM_PROMOTION_PROFITABILITY = "1"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[sweeps.blocking]
+values = [
+    { name = "default", BLOCK_N = 8, SPM_ROW_BLOCK = 4, SPM_ROW_GROUP_BLOCKS = 8, SPM_INTERNAL_ROW_BLOCK = 1 },
+]
+tag_template = "{M}x{N}/bn{BLOCK_N}-spmrb{SPM_ROW_BLOCK}-spmrg{SPM_ROW_GROUP_BLOCKS}"

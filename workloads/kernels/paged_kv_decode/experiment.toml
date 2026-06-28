@@ -1,0 +1,139 @@
+# Experiment manifest for paged_kv_decode: a scoped single-query
+# PagedAttention-style decode microkernel.
+#
+# The compiler-managed SPM page-gather path is default-on for SPM builds.
+# Set TRITON_SPM_PAGED_KV_DECODE=0 to disable the recognizer, or
+# TRITON_SPM_PAGED_KV_DECODE_DOUBLE_BUFFER=0 to force the older C1
+# single-buffer staging path.
+
+[kernel]
+name = "paged_kv_decode"
+env_prefix = "PAGED_KV_DECODE_"
+tag_template = "np{NUM_PAGES}_ps{PAGE_SIZE}_hd{HEAD_DIM}_pp{NUM_PHYS_PAGES}_uq{PAGE_ID_UNIQUE}/default"
+expect_spm = true
+
+[kernel.verify]
+expect_dma = true
+expect_promotion_reason = "accepted_paged_kv_gather_double_buffered"
+
+[params]
+NUM_PAGES = 2
+NUM_PHYS_PAGES = 8
+PAGE_SIZE = 16
+HEAD_DIM = 32
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+TOLERANCE = "1e-4f"
+REL_TOLERANCE = "1e-4f"
+
+[build]
+c_macros = [
+    "PAGED_KV_DECODE_NUM_PAGES={NUM_PAGES}",
+    "PAGED_KV_DECODE_NUM_PHYS_PAGES={NUM_PHYS_PAGES}",
+    "PAGED_KV_DECODE_PAGE_SIZE={PAGE_SIZE}",
+    "PAGED_KV_DECODE_HEAD_DIM={HEAD_DIM}",
+    "PAGED_KV_DECODE_WARMUP_ITERS={WARMUP_ITERS}",
+    "PAGED_KV_DECODE_MEASURE_ITERS={MEASURE_ITERS}",
+    "PAGED_KV_DECODE_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+    "PAGED_KV_DECODE_CHECK_RESULT={CHECK_RESULT}",
+    "PAGED_KV_DECODE_PAGE_ID_UNIQUE={PAGE_ID_UNIQUE}",
+    "PAGED_KV_DECODE_TOLERANCE={TOLERANCE}",
+    "PAGED_KV_DECODE_REL_TOLERANCE={REL_TOLERANCE}",
+]
+
+[presets.smoke]
+NUM_PAGES = 2
+NUM_PHYS_PAGES = 8
+PAGE_SIZE = 16
+HEAD_DIM = 32
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+
+[presets.small]
+NUM_PAGES = 4
+NUM_PHYS_PAGES = 16
+PAGE_SIZE = 16
+HEAD_DIM = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+
+[presets.medium]
+NUM_PAGES = 8
+NUM_PHYS_PAGES = 32
+PAGE_SIZE = 16
+HEAD_DIM = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+
+[presets.stress]
+NUM_PAGES = 16
+NUM_PHYS_PAGES = 512
+PAGE_SIZE = 16
+HEAD_DIM = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+
+[presets.smoke-measure3]
+NUM_PAGES = 2
+NUM_PHYS_PAGES = 8
+PAGE_SIZE = 16
+HEAD_DIM = 32
+WARMUP_ITERS = 0
+MEASURE_ITERS = 3
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+
+[presets.small-measure3]
+NUM_PAGES = 4
+NUM_PHYS_PAGES = 16
+PAGE_SIZE = 16
+HEAD_DIM = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 3
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+
+[presets.medium-measure3]
+NUM_PAGES = 8
+NUM_PHYS_PAGES = 32
+PAGE_SIZE = 16
+HEAD_DIM = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 3
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+
+[presets.stress-measure3]
+NUM_PAGES = 16
+NUM_PHYS_PAGES = 512
+PAGE_SIZE = 16
+HEAD_DIM = 64
+WARMUP_ITERS = 0
+MEASURE_ITERS = 3
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 1
+PAGE_ID_UNIQUE = 1
+
+[sweeps.blocking]
+values = [
+    { name = "default" },
+]
+tag_template = "np{NUM_PAGES}_ps{PAGE_SIZE}_hd{HEAD_DIM}_pp{NUM_PHYS_PAGES}_uq{PAGE_ID_UNIQUE}/default"

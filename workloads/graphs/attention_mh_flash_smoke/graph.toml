@@ -1,0 +1,649 @@
+[graph]
+name = "attention_mh_flash_smoke"
+description = "Two-head causal decoder-block graph using one FlashAttention-style online-softmax node per head, followed by the same per-head output projection, head-sum, residual, LayerNorm, and FFN tail as attention_mh_causal_smoke."
+
+[harness]
+source = "../attention_mh_causal_smoke/harness.c"
+
+[harness.params]
+SEQ = 32
+HEADS = 2
+D_MODEL = 32
+HEAD_DIM = 16
+FFN_DIM = 64
+BLOCK = 16
+QKV_BLOCK_M = 32
+QKV_BLOCK_N = 16
+FLASH_BLOCK_M = 16
+FLASH_BLOCK_N = 16
+O_PROJ_BLOCK_M = 32
+O_PROJ_BLOCK_N = 16
+FFN_UP_BLOCK_M = 32
+FFN_UP_BLOCK_N = 32
+FFN_DOWN_BLOCK_M = 32
+FFN_DOWN_BLOCK_N = 16
+CAUSAL = 1
+FOLD_ATTENTION_SCALE_IN_Q = 1
+USE_FLASH_ATTENTION = 1
+CHECK_RESULT = 1
+CHECK_INTERMEDIATES = 0
+FLUSH_BEFORE_ROI = 1
+TRACE_PROGRESS = 0
+
+[harness.build]
+c_macros = [
+    "GRAPH_SEQ={SEQ}",
+    "GRAPH_HEADS={HEADS}",
+    "GRAPH_D_MODEL={D_MODEL}",
+    "GRAPH_HEAD_DIM={HEAD_DIM}",
+    "GRAPH_FFN_DIM={FFN_DIM}",
+    "GRAPH_BLOCK={BLOCK}",
+    "GRAPH_QKV_BLOCK_M={QKV_BLOCK_M}",
+    "GRAPH_QKV_BLOCK_N={QKV_BLOCK_N}",
+    "GRAPH_FLASH_BLOCK_M={FLASH_BLOCK_M}",
+    "GRAPH_FLASH_BLOCK_N={FLASH_BLOCK_N}",
+    "GRAPH_O_PROJ_BLOCK_M={O_PROJ_BLOCK_M}",
+    "GRAPH_O_PROJ_BLOCK_N={O_PROJ_BLOCK_N}",
+    "GRAPH_FFN_UP_BLOCK_M={FFN_UP_BLOCK_M}",
+    "GRAPH_FFN_UP_BLOCK_N={FFN_UP_BLOCK_N}",
+    "GRAPH_FFN_DOWN_BLOCK_M={FFN_DOWN_BLOCK_M}",
+    "GRAPH_FFN_DOWN_BLOCK_N={FFN_DOWN_BLOCK_N}",
+    "GRAPH_CAUSAL={CAUSAL}",
+    "GRAPH_FOLD_ATTENTION_SCALE_IN_Q={FOLD_ATTENTION_SCALE_IN_Q}",
+    "GRAPH_USE_FLASH_ATTENTION={USE_FLASH_ATTENTION}",
+    "GRAPH_CHECK_RESULT={CHECK_RESULT}",
+    "GRAPH_CHECK_INTERMEDIATES={CHECK_INTERMEDIATES}",
+    "GRAPH_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+    "GRAPH_TRACE_PROGRESS={TRACE_PROGRESS}",
+]
+
+[tensors.x]
+kind = "external_input"
+read_only = true
+dma_only = false
+note = "Shape [SEQ, D_MODEL]. LayerNorm input remains on the ordinary DRAM path."
+
+[tensors.gamma]
+kind = "external_weight"
+read_only = true
+dma_only = false
+
+[tensors.beta]
+kind = "external_weight"
+read_only = true
+dma_only = false
+
+[tensors.ln_out]
+kind = "intermediate"
+producer = "layer_norm"
+consumers = ["q_proj_h0", "k_proj_h0", "v_proj_h0", "q_proj_h1", "k_proj_h1", "v_proj_h1"]
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.wq_h0]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [D_MODEL, HEAD_DIM]. Pre-scaled by 1/sqrt(HEAD_DIM) in the harness."
+
+[tensors.wk_h0]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.wv_h0]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.q_h0]
+kind = "intermediate"
+producer = "q_proj_h0"
+consumers = ["flash_attention_h0"]
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.k_h0]
+kind = "intermediate"
+producer = "k_proj_h0"
+consumers = ["flash_attention_h0"]
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.v_h0]
+kind = "intermediate"
+producer = "v_proj_h0"
+consumers = ["flash_attention_h0"]
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.attn_h0]
+kind = "intermediate"
+producer = "flash_attention_h0"
+consumers = ["o_proj_h0"]
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.wo_h0]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [HEAD_DIM, D_MODEL]. Corresponds to head 0 slice of W_o."
+
+[tensors.attn_proj_h0]
+kind = "intermediate"
+producer = "o_proj_h0"
+consumers = ["attn_head_sum"]
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.wq_h1]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [D_MODEL, HEAD_DIM]. Pre-scaled by 1/sqrt(HEAD_DIM) in the harness."
+
+[tensors.wk_h1]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.wv_h1]
+kind = "external_weight"
+read_only = true
+dma_only = true
+
+[tensors.q_h1]
+kind = "intermediate"
+producer = "q_proj_h1"
+consumers = ["flash_attention_h1"]
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.k_h1]
+kind = "intermediate"
+producer = "k_proj_h1"
+consumers = ["flash_attention_h1"]
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.v_h1]
+kind = "intermediate"
+producer = "v_proj_h1"
+consumers = ["flash_attention_h1"]
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.attn_h1]
+kind = "intermediate"
+producer = "flash_attention_h1"
+consumers = ["o_proj_h1"]
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.wo_h1]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [HEAD_DIM, D_MODEL]. Corresponds to head 1 slice of W_o."
+
+[tensors.attn_proj_h1]
+kind = "intermediate"
+producer = "o_proj_h1"
+consumers = ["attn_head_sum"]
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.attn_sum]
+kind = "intermediate"
+producer = "attn_head_sum"
+consumers = ["attn_residual_add"]
+note = "Shape [SEQ, D_MODEL]. Sum of per-head output-projection partials, equivalent to concat(heads) @ W_o."
+
+[tensors.residual]
+kind = "external_input"
+read_only = true
+dma_only = false
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.resid_out]
+kind = "intermediate"
+producer = "attn_residual_add"
+consumers = ["ln2", "final_residual_add"]
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.gamma2]
+kind = "external_weight"
+read_only = true
+dma_only = false
+
+[tensors.beta2]
+kind = "external_weight"
+read_only = true
+dma_only = false
+
+[tensors.ln2_out]
+kind = "intermediate"
+producer = "ln2"
+consumers = ["ffn_up"]
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.w_up]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [D_MODEL, FFN_DIM]."
+
+[tensors.ffn_hidden]
+kind = "intermediate"
+producer = "ffn_up"
+consumers = ["ffn_activation"]
+note = "Shape [SEQ, FFN_DIM]."
+
+[tensors.ffn_act]
+kind = "intermediate"
+producer = "ffn_activation"
+consumers = ["ffn_down"]
+note = "Shape [SEQ, FFN_DIM]."
+
+[tensors.w_down]
+kind = "external_weight"
+read_only = true
+dma_only = true
+note = "Shape [FFN_DIM, D_MODEL]."
+
+[tensors.ffn_out]
+kind = "intermediate"
+producer = "ffn_down"
+consumers = ["final_residual_add"]
+note = "Shape [SEQ, D_MODEL]."
+
+[tensors.block_out]
+kind = "graph_output"
+producer = "final_residual_add"
+note = "Shape [SEQ, D_MODEL]."
+
+[nodes.layer_norm]
+kernel = "layer_norm"
+args = ["x", "gamma", "beta", "ln_out"]
+
+[nodes.layer_norm.params]
+M = 32
+N = 32
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.q_proj_h0]
+kernel = "matmul"
+args = ["ln_out", "wq_h0", "q_h0"]
+
+[nodes.q_proj_h0.params]
+M = 32
+N = 16
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.k_proj_h0]
+kernel = "matmul"
+args = ["ln_out", "wk_h0", "k_h0"]
+
+[nodes.k_proj_h0.params]
+M = 32
+N = 16
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.v_proj_h0]
+kernel = "matmul"
+args = ["ln_out", "wv_h0", "v_h0"]
+
+[nodes.v_proj_h0.params]
+M = 32
+N = 16
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.flash_attention_h0]
+kernel = "flash_attention"
+args = ["q_h0", "k_h0", "v_h0", "attn_h0"]
+
+[nodes.flash_attention_h0.params]
+BATCH = 1
+HEADS = 1
+SEQ = 32
+HEAD_DIM = 16
+BLOCK_M = 16
+BLOCK_N = 16
+CAUSAL = 1
+CHECK_RESULT = 0
+
+[nodes.o_proj_h0]
+kernel = "matmul"
+args = ["attn_h0", "wo_h0", "attn_proj_h0"]
+
+[nodes.o_proj_h0.params]
+M = 32
+N = 32
+K = 16
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 16
+CHECK_RESULT = 0
+
+[nodes.q_proj_h1]
+kernel = "matmul"
+args = ["ln_out", "wq_h1", "q_h1"]
+
+[nodes.q_proj_h1.params]
+M = 32
+N = 16
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.k_proj_h1]
+kernel = "matmul"
+args = ["ln_out", "wk_h1", "k_h1"]
+
+[nodes.k_proj_h1.params]
+M = 32
+N = 16
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.v_proj_h1]
+kernel = "matmul"
+args = ["ln_out", "wv_h1", "v_h1"]
+
+[nodes.v_proj_h1.params]
+M = 32
+N = 16
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.flash_attention_h1]
+kernel = "flash_attention"
+args = ["q_h1", "k_h1", "v_h1", "attn_h1"]
+
+[nodes.flash_attention_h1.params]
+BATCH = 1
+HEADS = 1
+SEQ = 32
+HEAD_DIM = 16
+BLOCK_M = 16
+BLOCK_N = 16
+CAUSAL = 1
+CHECK_RESULT = 0
+
+[nodes.o_proj_h1]
+kernel = "matmul"
+args = ["attn_h1", "wo_h1", "attn_proj_h1"]
+
+[nodes.o_proj_h1.params]
+M = 32
+N = 32
+K = 16
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 16
+CHECK_RESULT = 0
+
+[nodes.attn_head_sum]
+kernel = "residual_add"
+args = ["attn_proj_h0", "attn_proj_h1", "attn_sum"]
+
+[nodes.attn_head_sum.params]
+SIZE = 1024
+BLOCK_SIZE = 16
+CHECK_RESULT = 0
+
+[nodes.attn_residual_add]
+kernel = "residual_add"
+args = ["attn_sum", "residual", "resid_out"]
+
+[nodes.attn_residual_add.params]
+SIZE = 1024
+BLOCK_SIZE = 16
+CHECK_RESULT = 0
+
+[nodes.ln2]
+kernel = "layer_norm"
+args = ["resid_out", "gamma2", "beta2", "ln2_out"]
+
+[nodes.ln2.params]
+M = 32
+N = 32
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.ffn_up]
+kernel = "matmul"
+args = ["ln2_out", "w_up", "ffn_hidden"]
+
+[nodes.ffn_up.params]
+M = 32
+N = 64
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.ffn_activation]
+kernel = "activation"
+args = ["ffn_hidden", "ffn_act"]
+
+[nodes.ffn_activation.params]
+SIZE = 2048
+BLOCK_SIZE = 16
+CHECK_RESULT = 0
+
+[nodes.ffn_down]
+kernel = "matmul"
+args = ["ffn_act", "w_down", "ffn_out"]
+
+[nodes.ffn_down.params]
+M = 32
+N = 32
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[nodes.final_residual_add]
+kernel = "residual_add"
+args = ["ffn_out", "resid_out", "block_out"]
+
+[nodes.final_residual_add.params]
+SIZE = 1024
+BLOCK_SIZE = 16
+CHECK_RESULT = 0
+
+[presets.large.graph]
+description = "Large two-head causal FlashAttention decoder-block graph at s256 d128 h64 f512."
+
+[presets.large.harness.params]
+SEQ = 256
+HEADS = 2
+D_MODEL = 128
+HEAD_DIM = 64
+FFN_DIM = 512
+BLOCK = 64
+QKV_BLOCK_M = 32
+QKV_BLOCK_N = 32
+FLASH_BLOCK_M = 16
+FLASH_BLOCK_N = 16
+O_PROJ_BLOCK_M = 32
+O_PROJ_BLOCK_N = 32
+FFN_UP_BLOCK_M = 32
+FFN_UP_BLOCK_N = 32
+FFN_DOWN_BLOCK_M = 32
+FFN_DOWN_BLOCK_N = 32
+CAUSAL = 1
+FOLD_ATTENTION_SCALE_IN_Q = 1
+USE_FLASH_ATTENTION = 1
+CHECK_RESULT = 0
+CHECK_INTERMEDIATES = 0
+FLUSH_BEFORE_ROI = 1
+TRACE_PROGRESS = 0
+
+[presets.large.nodes.layer_norm.params]
+M = 256
+N = 128
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[presets.large.nodes.q_proj_h0.params]
+M = 256
+N = 64
+K = 128
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.k_proj_h0.params]
+M = 256
+N = 64
+K = 128
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.v_proj_h0.params]
+M = 256
+N = 64
+K = 128
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.flash_attention_h0.params]
+BATCH = 1
+HEADS = 1
+SEQ = 256
+HEAD_DIM = 64
+BLOCK_M = 16
+BLOCK_N = 16
+CAUSAL = 1
+CHECK_RESULT = 0
+
+[presets.large.nodes.o_proj_h0.params]
+M = 256
+N = 128
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.q_proj_h1.params]
+M = 256
+N = 64
+K = 128
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.k_proj_h1.params]
+M = 256
+N = 64
+K = 128
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.v_proj_h1.params]
+M = 256
+N = 64
+K = 128
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.flash_attention_h1.params]
+BATCH = 1
+HEADS = 1
+SEQ = 256
+HEAD_DIM = 64
+BLOCK_M = 16
+BLOCK_N = 16
+CAUSAL = 1
+CHECK_RESULT = 0
+
+[presets.large.nodes.o_proj_h1.params]
+M = 256
+N = 128
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.attn_head_sum.params]
+SIZE = 32768
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[presets.large.nodes.attn_residual_add.params]
+SIZE = 32768
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[presets.large.nodes.ln2.params]
+M = 256
+N = 128
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[presets.large.nodes.ffn_up.params]
+M = 256
+N = 512
+K = 128
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.ffn_activation.params]
+SIZE = 131072
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[presets.large.nodes.ffn_down.params]
+M = 256
+N = 128
+K = 512
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+CHECK_RESULT = 0
+
+[presets.large.nodes.final_residual_add.params]
+SIZE = 32768
+BLOCK_SIZE = 64
+CHECK_RESULT = 0

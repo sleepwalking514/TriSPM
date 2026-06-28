@@ -1,0 +1,339 @@
+[graph]
+name = "canonical_attention"
+description = "Canonical attention fixture: QK matmul -> row softmax -> PV matmul. Scale is folded into the Q input so both QK and PV stay ordinary GEMM-shaped matmul nodes."
+
+[harness]
+source = "harness.c"
+
+[harness.params]
+SEQ = 32
+HEAD_DIM = 16
+QK_BLOCK_M = 32
+QK_BLOCK_N = 16
+QK_BLOCK_K = 8
+PV_BLOCK_M = 32
+PV_BLOCK_N = 16
+PV_BLOCK_K = 16
+SOFTMAX_BLOCK_N = 32
+SOFTMAX_ROW_BLOCK = 1
+SOFTMAX_ROW_GROUP_BLOCKS = 1
+SOFTMAX_INTERNAL_ROW_BLOCK = 0
+CAUSAL = 0
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+CHECK_RESULT = 1
+FLUSH_BEFORE_ROI = 1
+
+[harness.build]
+c_macros = [
+    "GRAPH_SEQ={SEQ}",
+    "GRAPH_HEAD_DIM={HEAD_DIM}",
+    "GRAPH_QK_BLOCK_M={QK_BLOCK_M}",
+    "GRAPH_QK_BLOCK_N={QK_BLOCK_N}",
+    "GRAPH_QK_BLOCK_K={QK_BLOCK_K}",
+    "GRAPH_PV_BLOCK_M={PV_BLOCK_M}",
+    "GRAPH_PV_BLOCK_N={PV_BLOCK_N}",
+    "GRAPH_PV_BLOCK_K={PV_BLOCK_K}",
+    "GRAPH_SOFTMAX_BLOCK_N={SOFTMAX_BLOCK_N}",
+    "GRAPH_SOFTMAX_ROW_BLOCK={SOFTMAX_ROW_BLOCK}",
+    "GRAPH_SOFTMAX_ROW_GROUP_BLOCKS={SOFTMAX_ROW_GROUP_BLOCKS}",
+    "GRAPH_SOFTMAX_INTERNAL_ROW_BLOCK={SOFTMAX_INTERNAL_ROW_BLOCK}",
+    "GRAPH_CAUSAL={CAUSAL}",
+    "GRAPH_WARMUP_ITERS={WARMUP_ITERS}",
+    "GRAPH_MEASURE_ITERS={MEASURE_ITERS}",
+    "GRAPH_CHECK_RESULT={CHECK_RESULT}",
+    "GRAPH_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+]
+
+[harness.cache.params]
+QK_BLOCK_M = 32
+QK_BLOCK_N = 64
+PV_BLOCK_M = 32
+PV_BLOCK_N = 64
+SOFTMAX_BLOCK_N = 32
+SOFTMAX_ROW_BLOCK = 1
+SOFTMAX_ROW_GROUP_BLOCKS = 1
+SOFTMAX_INTERNAL_ROW_BLOCK = 0
+
+[harness.spm.params]
+QK_BLOCK_M = 32
+QK_BLOCK_N = 32
+PV_BLOCK_M = 32
+PV_BLOCK_N = 32
+SOFTMAX_BLOCK_N = 32
+SOFTMAX_ROW_BLOCK = 2
+SOFTMAX_ROW_GROUP_BLOCKS = 8
+SOFTMAX_INTERNAL_ROW_BLOCK = 1
+
+[tensors.q]
+kind = "external_input"
+read_only = true
+dma_only = true
+note = "Shape [SEQ, HEAD_DIM]. Values are pre-scaled by 1/sqrt(HEAD_DIM)."
+
+[tensors.k_t]
+kind = "external_input"
+read_only = true
+dma_only = true
+note = "Shape [HEAD_DIM, SEQ], already transposed so QK is a plain matmul."
+
+[tensors.v]
+kind = "external_input"
+read_only = true
+dma_only = true
+note = "Shape [SEQ, HEAD_DIM]."
+
+[tensors.scores]
+kind = "intermediate"
+producer = "qk"
+consumers = ["softmax"]
+note = "Shape [SEQ, SEQ]."
+
+[tensors.probs]
+kind = "intermediate"
+producer = "softmax"
+consumers = ["pv"]
+note = "Shape [SEQ, SEQ]."
+
+[tensors.out]
+kind = "graph_output"
+producer = "pv"
+note = "Shape [SEQ, HEAD_DIM]."
+
+[nodes.qk]
+kernel = "matmul"
+args = ["q", "k_t", "scores"]
+
+[nodes.qk.params]
+M = 32
+N = 32
+K = 16
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 8
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.qk.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.qk.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.qk.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.softmax]
+kernel = "softmax"
+args = ["scores", "probs"]
+
+[nodes.softmax.params]
+M = 32
+N = 32
+BLOCK_N = 32
+CAUSAL = 0
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+CHECK_RESULT = 0
+
+[nodes.softmax.cache.params]
+BLOCK_N = 256
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.softmax.spm.params]
+BLOCK_N = 32
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.pv]
+kernel = "matmul"
+args = ["probs", "v", "out"]
+
+[nodes.pv.params]
+M = 32
+N = 16
+K = 32
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 16
+BLOCK_SIZE_K = 16
+GROUP_SIZE_M = 2
+CHECK_RESULT = 0
+
+[nodes.pv.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.pv.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 2
+
+[nodes.pv.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[presets.s256h64-c1.graph]
+description = "Canonical attention at s256h64-c1: QK matmul -> causal row softmax -> PV matmul."
+
+[presets.s256h64-c1.harness.params]
+SEQ = 256
+HEAD_DIM = 64
+QK_BLOCK_M = 32
+QK_BLOCK_N = 32
+QK_BLOCK_K = 32
+PV_BLOCK_M = 32
+PV_BLOCK_N = 32
+PV_BLOCK_K = 32
+SOFTMAX_BLOCK_N = 256
+SOFTMAX_ROW_BLOCK = 1
+SOFTMAX_ROW_GROUP_BLOCKS = 1
+SOFTMAX_INTERNAL_ROW_BLOCK = 0
+CAUSAL = 1
+WARMUP_ITERS = 2
+MEASURE_ITERS = 5
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 0
+
+[presets.s256h64-c1.harness.cache.params]
+QK_BLOCK_M = 32
+QK_BLOCK_N = 64
+PV_BLOCK_M = 32
+PV_BLOCK_N = 64
+SOFTMAX_BLOCK_N = 256
+SOFTMAX_ROW_BLOCK = 1
+SOFTMAX_ROW_GROUP_BLOCKS = 1
+SOFTMAX_INTERNAL_ROW_BLOCK = 0
+
+[presets.s256h64-c1.harness.spm.params]
+QK_BLOCK_M = 32
+QK_BLOCK_N = 32
+PV_BLOCK_M = 32
+PV_BLOCK_N = 32
+SOFTMAX_BLOCK_N = 32
+SOFTMAX_ROW_BLOCK = 2
+SOFTMAX_ROW_GROUP_BLOCKS = 8
+SOFTMAX_INTERNAL_ROW_BLOCK = 1
+
+[presets.s256h64-c1.nodes.qk.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[presets.s256h64-c1.nodes.softmax.params]
+M = 256
+N = 256
+BLOCK_N = 32
+CAUSAL = 1
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+CHECK_RESULT = 0
+
+[presets.s256h64-c1.nodes.pv.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 2
+CHECK_RESULT = 0
+
+[presets.s512h64-c1.graph]
+description = "Canonical attention at s512h64-c1: QK matmul -> causal row softmax -> PV matmul."
+
+[presets.s512h64-c1.harness.params]
+SEQ = 512
+HEAD_DIM = 64
+QK_BLOCK_M = 32
+QK_BLOCK_N = 32
+QK_BLOCK_K = 32
+PV_BLOCK_M = 32
+PV_BLOCK_N = 32
+PV_BLOCK_K = 32
+SOFTMAX_BLOCK_N = 512
+SOFTMAX_ROW_BLOCK = 1
+SOFTMAX_ROW_GROUP_BLOCKS = 1
+SOFTMAX_INTERNAL_ROW_BLOCK = 0
+CAUSAL = 1
+WARMUP_ITERS = 2
+MEASURE_ITERS = 5
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 0
+
+[presets.s512h64-c1.harness.cache.params]
+QK_BLOCK_M = 32
+QK_BLOCK_N = 64
+PV_BLOCK_M = 32
+PV_BLOCK_N = 64
+SOFTMAX_BLOCK_N = 512
+SOFTMAX_ROW_BLOCK = 1
+SOFTMAX_ROW_GROUP_BLOCKS = 1
+SOFTMAX_INTERNAL_ROW_BLOCK = 0
+
+[presets.s512h64-c1.harness.spm.params]
+QK_BLOCK_M = 32
+QK_BLOCK_N = 32
+PV_BLOCK_M = 32
+PV_BLOCK_N = 32
+SOFTMAX_BLOCK_N = 32
+SOFTMAX_ROW_BLOCK = 2
+SOFTMAX_ROW_GROUP_BLOCKS = 8
+SOFTMAX_INTERNAL_ROW_BLOCK = 1
+
+[presets.s512h64-c1.nodes.qk.params]
+M = 512
+N = 512
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[presets.s512h64-c1.nodes.softmax.params]
+M = 512
+N = 512
+BLOCK_N = 32
+CAUSAL = 1
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+CHECK_RESULT = 0
+
+[presets.s512h64-c1.nodes.softmax.cache.params]
+BLOCK_N = 512
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[presets.s512h64-c1.nodes.pv.params]
+M = 512
+N = 64
+K = 512
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 2
+CHECK_RESULT = 0

@@ -1,0 +1,1459 @@
+[graph]
+name = "decoder_canonical_small_mh4"
+description = "4-head causal decoder-block graph using canonical attention per head: layer_norm -> per-head q/k/v -> k_transpose -> qk -> causal softmax -> pv -> per-head o_proj -> head-sum -> residual_add -> layer_norm -> ffn_up -> activation -> ffn_down -> residual_add. The attention scale is folded into each Q projection weight."
+
+[harness]
+source = "harness.c"
+
+[harness.params]
+SEQ = 256
+HEADS = 4
+D_MODEL = 256
+HEAD_DIM = 64
+FFN_DIM = 1024
+BLOCK = 64
+QKV_BLOCK_M = 32
+QKV_BLOCK_N = 32
+QK_BLOCK_M = 32
+QK_BLOCK_N = 32
+PV_BLOCK_M = 32
+PV_BLOCK_N = 32
+O_PROJ_BLOCK_M = 32
+O_PROJ_BLOCK_N = 32
+FFN_UP_BLOCK_M = 32
+FFN_UP_BLOCK_N = 32
+FFN_DOWN_BLOCK_M = 32
+FFN_DOWN_BLOCK_N = 32
+K_TRANSPOSE_BLOCK_M = 16
+K_TRANSPOSE_BLOCK_N = 16
+LAYERNORM_ROW_BLOCK = 4
+LAYERNORM_ROW_GROUP_BLOCKS = 8
+LAYERNORM_INTERNAL_ROW_BLOCK = 1
+SOFTMAX_ROW_BLOCK = 2
+SOFTMAX_ROW_GROUP_BLOCKS = 8
+SOFTMAX_INTERNAL_ROW_BLOCK = 1
+CAUSAL = 1
+FOLD_ATTENTION_SCALE_IN_Q = 1
+CHECK_RESULT = 0
+CHECK_INTERMEDIATES = 0
+FLUSH_BEFORE_ROI = 1
+TRACE_PROGRESS = 0
+DUMP_KERNEL_STATS = 0
+
+[harness.build]
+c_macros = ["GRAPH_SEQ={SEQ}", "GRAPH_HEADS={HEADS}", "GRAPH_D_MODEL={D_MODEL}", "GRAPH_HEAD_DIM={HEAD_DIM}", "GRAPH_FFN_DIM={FFN_DIM}", "GRAPH_BLOCK={BLOCK}", "GRAPH_QKV_BLOCK_M={QKV_BLOCK_M}", "GRAPH_QKV_BLOCK_N={QKV_BLOCK_N}", "GRAPH_QK_BLOCK_M={QK_BLOCK_M}", "GRAPH_QK_BLOCK_N={QK_BLOCK_N}", "GRAPH_PV_BLOCK_M={PV_BLOCK_M}", "GRAPH_PV_BLOCK_N={PV_BLOCK_N}", "GRAPH_O_PROJ_BLOCK_M={O_PROJ_BLOCK_M}", "GRAPH_O_PROJ_BLOCK_N={O_PROJ_BLOCK_N}", "GRAPH_FFN_UP_BLOCK_M={FFN_UP_BLOCK_M}", "GRAPH_FFN_UP_BLOCK_N={FFN_UP_BLOCK_N}", "GRAPH_FFN_DOWN_BLOCK_M={FFN_DOWN_BLOCK_M}", "GRAPH_FFN_DOWN_BLOCK_N={FFN_DOWN_BLOCK_N}", "GRAPH_K_TRANSPOSE_BLOCK_M={K_TRANSPOSE_BLOCK_M}", "GRAPH_K_TRANSPOSE_BLOCK_N={K_TRANSPOSE_BLOCK_N}", "GRAPH_LAYERNORM_ROW_BLOCK={LAYERNORM_ROW_BLOCK}", "GRAPH_LAYERNORM_ROW_GROUP_BLOCKS={LAYERNORM_ROW_GROUP_BLOCKS}", "GRAPH_LAYERNORM_INTERNAL_ROW_BLOCK={LAYERNORM_INTERNAL_ROW_BLOCK}", "GRAPH_SOFTMAX_ROW_BLOCK={SOFTMAX_ROW_BLOCK}", "GRAPH_SOFTMAX_ROW_GROUP_BLOCKS={SOFTMAX_ROW_GROUP_BLOCKS}", "GRAPH_SOFTMAX_INTERNAL_ROW_BLOCK={SOFTMAX_INTERNAL_ROW_BLOCK}", "GRAPH_CAUSAL={CAUSAL}", "GRAPH_FOLD_ATTENTION_SCALE_IN_Q={FOLD_ATTENTION_SCALE_IN_Q}", "GRAPH_CHECK_RESULT={CHECK_RESULT}", "GRAPH_CHECK_INTERMEDIATES={CHECK_INTERMEDIATES}", "GRAPH_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}", "GRAPH_TRACE_PROGRESS={TRACE_PROGRESS}", "GRAPH_DUMP_KERNEL_STATS={DUMP_KERNEL_STATS}"]
+
+[harness.cache.params]
+QKV_BLOCK_M = 32
+QKV_BLOCK_N = 64
+QK_BLOCK_M = 32
+QK_BLOCK_N = 64
+PV_BLOCK_M = 32
+PV_BLOCK_N = 64
+O_PROJ_BLOCK_M = 32
+O_PROJ_BLOCK_N = 64
+FFN_UP_BLOCK_M = 32
+FFN_UP_BLOCK_N = 64
+FFN_DOWN_BLOCK_M = 32
+FFN_DOWN_BLOCK_N = 64
+LAYERNORM_ROW_BLOCK = 1
+LAYERNORM_ROW_GROUP_BLOCKS = 1
+LAYERNORM_INTERNAL_ROW_BLOCK = 0
+SOFTMAX_ROW_BLOCK = 1
+SOFTMAX_ROW_GROUP_BLOCKS = 1
+SOFTMAX_INTERNAL_ROW_BLOCK = 0
+
+[harness.spm.params]
+QKV_BLOCK_M = 32
+QKV_BLOCK_N = 32
+QK_BLOCK_M = 32
+QK_BLOCK_N = 32
+PV_BLOCK_M = 32
+PV_BLOCK_N = 32
+O_PROJ_BLOCK_M = 32
+O_PROJ_BLOCK_N = 32
+FFN_UP_BLOCK_M = 32
+FFN_UP_BLOCK_N = 32
+FFN_DOWN_BLOCK_M = 32
+FFN_DOWN_BLOCK_N = 32
+LAYERNORM_ROW_BLOCK = 4
+LAYERNORM_ROW_GROUP_BLOCKS = 8
+LAYERNORM_INTERNAL_ROW_BLOCK = 1
+SOFTMAX_ROW_BLOCK = 2
+SOFTMAX_ROW_GROUP_BLOCKS = 8
+SOFTMAX_INTERNAL_ROW_BLOCK = 1
+
+[tensors.x]
+kind = "external_input"
+read_only = true
+
+[tensors.gamma]
+kind = "external_weight"
+read_only = true
+
+[tensors.beta]
+kind = "external_weight"
+read_only = true
+
+[tensors.ln_out]
+kind = "intermediate"
+producer = "layer_norm"
+consumers = ["q_proj_h0", "q_proj_h1", "q_proj_h2", "q_proj_h3", "k_proj_h0", "k_proj_h1", "k_proj_h2", "k_proj_h3", "v_proj_h0", "v_proj_h1", "v_proj_h2", "v_proj_h3"]
+
+[tensors.wq_h0]
+kind = "external_weight"
+read_only = true
+
+[tensors.wk_h0]
+kind = "external_weight"
+read_only = true
+
+[tensors.wv_h0]
+kind = "external_weight"
+read_only = true
+
+[tensors.q_h0]
+kind = "intermediate"
+producer = "q_proj_h0"
+consumers = ["qk_h0"]
+
+[tensors.k_h0]
+kind = "intermediate"
+producer = "k_proj_h0"
+consumers = ["k_transpose_h0"]
+
+[tensors.k_t_h0]
+kind = "intermediate"
+producer = "k_transpose_h0"
+consumers = ["qk_h0"]
+
+[tensors.v_h0]
+kind = "intermediate"
+producer = "v_proj_h0"
+consumers = ["pv_h0"]
+
+[tensors.scores_h0]
+kind = "intermediate"
+producer = "qk_h0"
+consumers = ["softmax_h0"]
+
+[tensors.probs_h0]
+kind = "intermediate"
+producer = "softmax_h0"
+consumers = ["pv_h0"]
+
+[tensors.attn_h0]
+kind = "intermediate"
+producer = "pv_h0"
+consumers = ["o_proj_h0"]
+
+[tensors.wo_h0]
+kind = "external_weight"
+read_only = true
+
+[tensors.attn_proj_h0]
+kind = "intermediate"
+producer = "o_proj_h0"
+consumers = ["attn_head_sum_0_1"]
+
+[tensors.wq_h1]
+kind = "external_weight"
+read_only = true
+
+[tensors.wk_h1]
+kind = "external_weight"
+read_only = true
+
+[tensors.wv_h1]
+kind = "external_weight"
+read_only = true
+
+[tensors.q_h1]
+kind = "intermediate"
+producer = "q_proj_h1"
+consumers = ["qk_h1"]
+
+[tensors.k_h1]
+kind = "intermediate"
+producer = "k_proj_h1"
+consumers = ["k_transpose_h1"]
+
+[tensors.k_t_h1]
+kind = "intermediate"
+producer = "k_transpose_h1"
+consumers = ["qk_h1"]
+
+[tensors.v_h1]
+kind = "intermediate"
+producer = "v_proj_h1"
+consumers = ["pv_h1"]
+
+[tensors.scores_h1]
+kind = "intermediate"
+producer = "qk_h1"
+consumers = ["softmax_h1"]
+
+[tensors.probs_h1]
+kind = "intermediate"
+producer = "softmax_h1"
+consumers = ["pv_h1"]
+
+[tensors.attn_h1]
+kind = "intermediate"
+producer = "pv_h1"
+consumers = ["o_proj_h1"]
+
+[tensors.wo_h1]
+kind = "external_weight"
+read_only = true
+
+[tensors.attn_proj_h1]
+kind = "intermediate"
+producer = "o_proj_h1"
+consumers = ["attn_head_sum_0_1"]
+
+[tensors.wq_h2]
+kind = "external_weight"
+read_only = true
+
+[tensors.wk_h2]
+kind = "external_weight"
+read_only = true
+
+[tensors.wv_h2]
+kind = "external_weight"
+read_only = true
+
+[tensors.q_h2]
+kind = "intermediate"
+producer = "q_proj_h2"
+consumers = ["qk_h2"]
+
+[tensors.k_h2]
+kind = "intermediate"
+producer = "k_proj_h2"
+consumers = ["k_transpose_h2"]
+
+[tensors.k_t_h2]
+kind = "intermediate"
+producer = "k_transpose_h2"
+consumers = ["qk_h2"]
+
+[tensors.v_h2]
+kind = "intermediate"
+producer = "v_proj_h2"
+consumers = ["pv_h2"]
+
+[tensors.scores_h2]
+kind = "intermediate"
+producer = "qk_h2"
+consumers = ["softmax_h2"]
+
+[tensors.probs_h2]
+kind = "intermediate"
+producer = "softmax_h2"
+consumers = ["pv_h2"]
+
+[tensors.attn_h2]
+kind = "intermediate"
+producer = "pv_h2"
+consumers = ["o_proj_h2"]
+
+[tensors.wo_h2]
+kind = "external_weight"
+read_only = true
+
+[tensors.attn_proj_h2]
+kind = "intermediate"
+producer = "o_proj_h2"
+consumers = ["attn_head_sum_2_3"]
+
+[tensors.wq_h3]
+kind = "external_weight"
+read_only = true
+
+[tensors.wk_h3]
+kind = "external_weight"
+read_only = true
+
+[tensors.wv_h3]
+kind = "external_weight"
+read_only = true
+
+[tensors.q_h3]
+kind = "intermediate"
+producer = "q_proj_h3"
+consumers = ["qk_h3"]
+
+[tensors.k_h3]
+kind = "intermediate"
+producer = "k_proj_h3"
+consumers = ["k_transpose_h3"]
+
+[tensors.k_t_h3]
+kind = "intermediate"
+producer = "k_transpose_h3"
+consumers = ["qk_h3"]
+
+[tensors.v_h3]
+kind = "intermediate"
+producer = "v_proj_h3"
+consumers = ["pv_h3"]
+
+[tensors.scores_h3]
+kind = "intermediate"
+producer = "qk_h3"
+consumers = ["softmax_h3"]
+
+[tensors.probs_h3]
+kind = "intermediate"
+producer = "softmax_h3"
+consumers = ["pv_h3"]
+
+[tensors.attn_h3]
+kind = "intermediate"
+producer = "pv_h3"
+consumers = ["o_proj_h3"]
+
+[tensors.wo_h3]
+kind = "external_weight"
+read_only = true
+
+[tensors.attn_proj_h3]
+kind = "intermediate"
+producer = "o_proj_h3"
+consumers = ["attn_head_sum_2_3"]
+
+[tensors.attn_sum_0_1]
+kind = "intermediate"
+producer = "attn_head_sum_0_1"
+consumers = ["attn_head_sum_0_3"]
+
+[tensors.attn_sum_2_3]
+kind = "intermediate"
+producer = "attn_head_sum_2_3"
+consumers = ["attn_head_sum_0_3"]
+
+[tensors.attn_sum]
+kind = "intermediate"
+producer = "attn_head_sum_0_3"
+consumers = ["attn_residual_add"]
+
+[tensors.residual]
+kind = "external_input"
+read_only = true
+
+[tensors.resid_out]
+kind = "intermediate"
+producer = "attn_residual_add"
+consumers = ["ln2", "final_residual_add"]
+
+[tensors.gamma2]
+kind = "external_weight"
+read_only = true
+
+[tensors.beta2]
+kind = "external_weight"
+read_only = true
+
+[tensors.ln2_out]
+kind = "intermediate"
+producer = "ln2"
+consumers = ["ffn_up"]
+
+[tensors.w_up]
+kind = "external_weight"
+read_only = true
+
+[tensors.ffn_hidden]
+kind = "intermediate"
+producer = "ffn_up"
+consumers = ["ffn_activation"]
+
+[tensors.ffn_act]
+kind = "intermediate"
+producer = "ffn_activation"
+consumers = ["ffn_down"]
+
+[tensors.w_down]
+kind = "external_weight"
+read_only = true
+
+[tensors.ffn_out]
+kind = "intermediate"
+producer = "ffn_down"
+consumers = ["final_residual_add"]
+
+[tensors.block_out]
+kind = "graph_output"
+producer = "final_residual_add"
+
+[nodes.layer_norm]
+kernel = "layer_norm"
+args = ["x", "gamma", "beta", "ln_out"]
+
+[nodes.layer_norm.params]
+M = 256
+N = 256
+BLOCK_N = 8
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.layer_norm.cache.params]
+BLOCK_N = 256
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.layer_norm.spm.params]
+BLOCK_N = 8
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.q_proj_h0]
+kernel = "matmul"
+args = ["ln_out", "wq_h0", "q_h0"]
+
+[nodes.q_proj_h0.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.q_proj_h0.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.q_proj_h0.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.q_proj_h0.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.k_proj_h0]
+kernel = "matmul"
+args = ["ln_out", "wk_h0", "k_h0"]
+
+[nodes.k_proj_h0.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.k_proj_h0.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.k_proj_h0.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.k_proj_h0.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.v_proj_h0]
+kernel = "matmul"
+args = ["ln_out", "wv_h0", "v_h0"]
+
+[nodes.v_proj_h0.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.v_proj_h0.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.v_proj_h0.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.v_proj_h0.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.k_transpose_h0]
+kernel = "transpose"
+args = ["k_h0", "k_t_h0"]
+
+[nodes.k_transpose_h0.params]
+M = 256
+N = 64
+BLOCK_M = 16
+BLOCK_N = 16
+CHECK_RESULT = 0
+
+[nodes.qk_h0]
+kernel = "matmul"
+args = ["q_h0", "k_t_h0", "scores_h0"]
+
+[nodes.qk_h0.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.qk_h0.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.qk_h0.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.qk_h0.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.softmax_h0]
+kernel = "softmax"
+args = ["scores_h0", "probs_h0"]
+
+[nodes.softmax_h0.params]
+M = 256
+N = 256
+BLOCK_N = 32
+CAUSAL = 1
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+CHECK_RESULT = 0
+
+[nodes.softmax_h0.cache.params]
+BLOCK_N = 256
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.softmax_h0.spm.params]
+BLOCK_N = 32
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.pv_h0]
+kernel = "matmul"
+args = ["probs_h0", "v_h0", "attn_h0"]
+
+[nodes.pv_h0.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.pv_h0.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.pv_h0.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.pv_h0.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.o_proj_h0]
+kernel = "matmul"
+args = ["attn_h0", "wo_h0", "attn_proj_h0"]
+
+[nodes.o_proj_h0.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.o_proj_h0.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.o_proj_h0.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.o_proj_h0.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.q_proj_h1]
+kernel = "matmul"
+args = ["ln_out", "wq_h1", "q_h1"]
+
+[nodes.q_proj_h1.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.q_proj_h1.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.q_proj_h1.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.q_proj_h1.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.k_proj_h1]
+kernel = "matmul"
+args = ["ln_out", "wk_h1", "k_h1"]
+
+[nodes.k_proj_h1.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.k_proj_h1.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.k_proj_h1.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.k_proj_h1.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.v_proj_h1]
+kernel = "matmul"
+args = ["ln_out", "wv_h1", "v_h1"]
+
+[nodes.v_proj_h1.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.v_proj_h1.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.v_proj_h1.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.v_proj_h1.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.k_transpose_h1]
+kernel = "transpose"
+args = ["k_h1", "k_t_h1"]
+
+[nodes.k_transpose_h1.params]
+M = 256
+N = 64
+BLOCK_M = 16
+BLOCK_N = 16
+CHECK_RESULT = 0
+
+[nodes.qk_h1]
+kernel = "matmul"
+args = ["q_h1", "k_t_h1", "scores_h1"]
+
+[nodes.qk_h1.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.qk_h1.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.qk_h1.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.qk_h1.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.softmax_h1]
+kernel = "softmax"
+args = ["scores_h1", "probs_h1"]
+
+[nodes.softmax_h1.params]
+M = 256
+N = 256
+BLOCK_N = 32
+CAUSAL = 1
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+CHECK_RESULT = 0
+
+[nodes.softmax_h1.cache.params]
+BLOCK_N = 256
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.softmax_h1.spm.params]
+BLOCK_N = 32
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.pv_h1]
+kernel = "matmul"
+args = ["probs_h1", "v_h1", "attn_h1"]
+
+[nodes.pv_h1.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.pv_h1.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.pv_h1.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.pv_h1.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.o_proj_h1]
+kernel = "matmul"
+args = ["attn_h1", "wo_h1", "attn_proj_h1"]
+
+[nodes.o_proj_h1.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.o_proj_h1.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.o_proj_h1.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.o_proj_h1.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.q_proj_h2]
+kernel = "matmul"
+args = ["ln_out", "wq_h2", "q_h2"]
+
+[nodes.q_proj_h2.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.q_proj_h2.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.q_proj_h2.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.q_proj_h2.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.k_proj_h2]
+kernel = "matmul"
+args = ["ln_out", "wk_h2", "k_h2"]
+
+[nodes.k_proj_h2.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.k_proj_h2.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.k_proj_h2.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.k_proj_h2.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.v_proj_h2]
+kernel = "matmul"
+args = ["ln_out", "wv_h2", "v_h2"]
+
+[nodes.v_proj_h2.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.v_proj_h2.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.v_proj_h2.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.v_proj_h2.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.k_transpose_h2]
+kernel = "transpose"
+args = ["k_h2", "k_t_h2"]
+
+[nodes.k_transpose_h2.params]
+M = 256
+N = 64
+BLOCK_M = 16
+BLOCK_N = 16
+CHECK_RESULT = 0
+
+[nodes.qk_h2]
+kernel = "matmul"
+args = ["q_h2", "k_t_h2", "scores_h2"]
+
+[nodes.qk_h2.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.qk_h2.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.qk_h2.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.qk_h2.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.softmax_h2]
+kernel = "softmax"
+args = ["scores_h2", "probs_h2"]
+
+[nodes.softmax_h2.params]
+M = 256
+N = 256
+BLOCK_N = 32
+CAUSAL = 1
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+CHECK_RESULT = 0
+
+[nodes.softmax_h2.cache.params]
+BLOCK_N = 256
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.softmax_h2.spm.params]
+BLOCK_N = 32
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.pv_h2]
+kernel = "matmul"
+args = ["probs_h2", "v_h2", "attn_h2"]
+
+[nodes.pv_h2.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.pv_h2.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.pv_h2.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.pv_h2.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.o_proj_h2]
+kernel = "matmul"
+args = ["attn_h2", "wo_h2", "attn_proj_h2"]
+
+[nodes.o_proj_h2.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.o_proj_h2.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.o_proj_h2.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.o_proj_h2.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.q_proj_h3]
+kernel = "matmul"
+args = ["ln_out", "wq_h3", "q_h3"]
+
+[nodes.q_proj_h3.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.q_proj_h3.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.q_proj_h3.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.q_proj_h3.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.k_proj_h3]
+kernel = "matmul"
+args = ["ln_out", "wk_h3", "k_h3"]
+
+[nodes.k_proj_h3.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.k_proj_h3.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.k_proj_h3.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.k_proj_h3.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.v_proj_h3]
+kernel = "matmul"
+args = ["ln_out", "wv_h3", "v_h3"]
+
+[nodes.v_proj_h3.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.v_proj_h3.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.v_proj_h3.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.v_proj_h3.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.k_transpose_h3]
+kernel = "transpose"
+args = ["k_h3", "k_t_h3"]
+
+[nodes.k_transpose_h3.params]
+M = 256
+N = 64
+BLOCK_M = 16
+BLOCK_N = 16
+CHECK_RESULT = 0
+
+[nodes.qk_h3]
+kernel = "matmul"
+args = ["q_h3", "k_t_h3", "scores_h3"]
+
+[nodes.qk_h3.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.qk_h3.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.qk_h3.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.qk_h3.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.softmax_h3]
+kernel = "softmax"
+args = ["scores_h3", "probs_h3"]
+
+[nodes.softmax_h3.params]
+M = 256
+N = 256
+BLOCK_N = 32
+CAUSAL = 1
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+CHECK_RESULT = 0
+
+[nodes.softmax_h3.cache.params]
+BLOCK_N = 256
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.softmax_h3.spm.params]
+BLOCK_N = 32
+SPM_ROW_BLOCK = 2
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.pv_h3]
+kernel = "matmul"
+args = ["probs_h3", "v_h3", "attn_h3"]
+
+[nodes.pv_h3.params]
+M = 256
+N = 64
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.pv_h3.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.pv_h3.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.pv_h3.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.o_proj_h3]
+kernel = "matmul"
+args = ["attn_h3", "wo_h3", "attn_proj_h3"]
+
+[nodes.o_proj_h3.params]
+M = 256
+N = 256
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.o_proj_h3.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.o_proj_h3.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.o_proj_h3.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.attn_head_sum_0_1]
+kernel = "residual_add"
+args = ["attn_proj_h0", "attn_proj_h1", "attn_sum_0_1"]
+
+[nodes.attn_head_sum_0_1.params]
+SIZE = 65536
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[nodes.attn_head_sum_2_3]
+kernel = "residual_add"
+args = ["attn_proj_h2", "attn_proj_h3", "attn_sum_2_3"]
+
+[nodes.attn_head_sum_2_3.params]
+SIZE = 65536
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[nodes.attn_head_sum_0_3]
+kernel = "residual_add"
+args = ["attn_sum_0_1", "attn_sum_2_3", "attn_sum"]
+
+[nodes.attn_head_sum_0_3.params]
+SIZE = 65536
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[nodes.attn_residual_add]
+kernel = "residual_add"
+args = ["attn_sum", "residual", "resid_out"]
+
+[nodes.attn_residual_add.params]
+SIZE = 65536
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[nodes.ln2]
+kernel = "layer_norm"
+args = ["resid_out", "gamma2", "beta2", "ln2_out"]
+
+[nodes.ln2.params]
+M = 256
+N = 256
+BLOCK_N = 8
+CHECK_RESULT = 0
+LAYERNORM_FLUSH_BEFORE_ROI = 1
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.ln2.cache.params]
+BLOCK_N = 256
+SPM_ROW_BLOCK = 1
+SPM_ROW_GROUP_BLOCKS = 1
+SPM_INTERNAL_ROW_BLOCK = 0
+
+[nodes.ln2.spm.params]
+BLOCK_N = 8
+SPM_ROW_BLOCK = 4
+SPM_ROW_GROUP_BLOCKS = 8
+SPM_INTERNAL_ROW_BLOCK = 1
+
+[nodes.ffn_up]
+kernel = "matmul"
+args = ["ln2_out", "w_up", "ffn_hidden"]
+
+[nodes.ffn_up.params]
+M = 256
+N = 1024
+K = 256
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.ffn_up.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.ffn_up.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.ffn_up.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.ffn_activation]
+kernel = "activation"
+args = ["ffn_hidden", "ffn_act"]
+
+[nodes.ffn_activation.params]
+SIZE = 262144
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[nodes.ffn_down]
+kernel = "matmul"
+args = ["ffn_act", "w_down", "ffn_out"]
+
+[nodes.ffn_down.params]
+M = 256
+N = 256
+K = 1024
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+CHECK_RESULT = 0
+
+[nodes.ffn_down.cache.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[nodes.ffn_down.spm.params]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[nodes.ffn_down.spm.env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[nodes.final_residual_add]
+kernel = "residual_add"
+args = ["ffn_out", "resid_out", "block_out"]
+
+[nodes.final_residual_add.params]
+SIZE = 65536
+BLOCK_SIZE = 64
+CHECK_RESULT = 0
+
+[presets.large.graph]
+description = "Canonical decoder block at s256 d256 heads4 head_dim64 ffn1024."
+
+[presets.large_profile.graph]
+description = "Profiling preset for the 4-head canonical decoder block. The harness dumps and resets gem5 stats after each kernel launch."
+
+[presets.large_profile.harness.params]
+DUMP_KERNEL_STATS = 1
+CHECK_RESULT = 0

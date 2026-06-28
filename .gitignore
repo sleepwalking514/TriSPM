@@ -1,0 +1,48 @@
+# Local/internal documentation and paper working state.
+/docs/
+
+# Local editor state.
+/.vscode/
+/.idea/
+*.swp
+*.swo
+*~
+
+# Python caches and virtual environments.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# TriSPM generated workload artifacts.
+/workloads/build/
+/workloads/m5out/
+/workloads/logs/
+/workloads/.triton_cache/
+
+# Large generated build trees in the in-tree forks. These are mostly governed
+# by each submodule's own ignore rules, but keep the top-level policy explicit.
+/compiler/build/
+/compiler/.venv/
+/compiler/.pytest_cache/
+/compiler/llvm-project/build/
+/simulator/build/
+
+# Native build and profiling by-products.
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dylib
+*.dSYM/
+*.profraw
+*.profdata
+*.log
+
+# OS metadata.
+.DS_Store
+Thumbs.db

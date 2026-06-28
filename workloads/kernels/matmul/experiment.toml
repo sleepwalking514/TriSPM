@@ -1,0 +1,88 @@
+# Experiment manifest for matmul.
+#
+# `params` are exported as MATMUL_<UPPER_KEY> env vars (per [kernel].env_prefix).
+# kernel.py reads them directly; harness.c picks up the same params through
+# [build].c_macros, rendered by scripts/run_experiment.py as -D flags.
+#
+# `sweeps` defines named sweep dimensions consumed by run_experiment.py.
+
+[kernel]
+name = "matmul"
+# Env var prefix prepended to each [params] key when exporting to
+# kernel.py. matmul's kernel.py reads MATMUL_M etc.
+env_prefix = "MATMUL_"
+# Slashes in tag_template create m5out subdirectories
+# (m5out/matmul/<MxNxK>/{spm,cache}/<bsMxbsNxbsK>/...).
+# Build dirs flatten the slashes back to '-' since they're intermediate.
+# GROUP_SIZE_M and other tuning knobs stay in [params] only — promote
+# them into the tag if they ever become a sweep axis.
+tag_template = "{M}x{N}x{K}/{BLOCK_SIZE_M}x{BLOCK_SIZE_N}x{BLOCK_SIZE_K}"
+expect_spm = true
+
+[params]
+M = 512
+N = 512
+K = 64
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+WARMUP_ITERS = 0
+MEASURE_ITERS = 1
+FLUSH_BEFORE_ROI = 1
+CHECK_RESULT = 0
+
+# Per-mode defaults are applied after [params] and [presets.*], but before
+# command-line `--set`, so `SET="GROUP_SIZE_M=..."` still wins.
+[mode_params.spm]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 32
+BLOCK_SIZE_K = 32
+GROUP_SIZE_M = 1
+
+[mode_params.cache]
+BLOCK_SIZE_M = 32
+BLOCK_SIZE_N = 64
+BLOCK_SIZE_K = 64
+GROUP_SIZE_M = 1
+
+[env]
+TRITON_MICRO_M = "8"
+TRITON_SPM_WINDOW_K = "4"
+TRITON_SPM_PROMOTION_REPORT = "1"
+
+[build]
+c_macros = [
+    "M={M}",
+    "N={N}",
+    "K={K}",
+    "BLOCK_SIZE_M={BLOCK_SIZE_M}",
+    "BLOCK_SIZE_N={BLOCK_SIZE_N}",
+    "BLOCK_SIZE_K={BLOCK_SIZE_K}",
+    "MATMUL_WARMUP_ITERS={WARMUP_ITERS}",
+    "MATMUL_MEASURE_ITERS={MEASURE_ITERS}",
+    "MATMUL_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+    "MATMUL_CHECK_RESULT={CHECK_RESULT}",
+]
+
+# Steady-state preset: warmup + multi-iter measurement, no pre-ROI flush.
+[presets.steady]
+WARMUP_ITERS = 2
+MEASURE_ITERS = 5
+FLUSH_BEFORE_ROI = 0
+
+[sweeps.size]
+axis = "N"
+values = [128, 256]
+mirror = ["M", "K"]   # set M=K=N for each value
+tag_template = "{M}x{N}x{K}/{BLOCK_SIZE_M}x{BLOCK_SIZE_N}x{BLOCK_SIZE_K}"
+
+[sweeps.blocking]
+values = [
+    { BLOCK_SIZE_M = 32, BLOCK_SIZE_N = 32, BLOCK_SIZE_K = 32 },
+    { BLOCK_SIZE_M = 64, BLOCK_SIZE_N = 64, BLOCK_SIZE_K = 32 },
+    { BLOCK_SIZE_M = 64, BLOCK_SIZE_N = 32, BLOCK_SIZE_K = 64 },
+    { BLOCK_SIZE_M = 32, BLOCK_SIZE_N = 64, BLOCK_SIZE_K = 64 },
+    { BLOCK_SIZE_M = 64, BLOCK_SIZE_N = 64, BLOCK_SIZE_K = 64 },
+]
+tag_template = "{M}x{N}x{K}/{BLOCK_SIZE_M}x{BLOCK_SIZE_N}x{BLOCK_SIZE_K}"

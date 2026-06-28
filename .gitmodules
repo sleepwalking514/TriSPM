@@ -1,0 +1,6 @@
+[submodule "simulator"]
+	path = simulator
+	url = https://github.com/sleepwalking514/TriSPM-gem5.git
+[submodule "compiler"]
+	path = compiler
+	url = https://github.com/sleepwalking514/TriSPM-Triton.git

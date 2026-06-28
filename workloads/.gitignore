@@ -1,0 +1,5 @@
+build/
+m5out/
+__pycache__/
+graphs/p4_*/
+graphs/p05_*/

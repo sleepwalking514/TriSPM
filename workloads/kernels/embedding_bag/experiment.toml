@@ -1,0 +1,185 @@
+# Experiment manifest for embedding_bag (first irregular-access workload).
+#
+# W1 scope: cache mode only.  SPM mode still falls back to the cache
+# lowering until C1 extends ConvertMemoryToSPM.cpp with an indirect-tile
+# recognizer.  verify therefore uses expect_spm=false for this manifest.
+
+[kernel]
+name = "embedding_bag"
+env_prefix = "EMB_"
+tag_template = "B{B}-L{L_MAX}-D{D}-R{NUM_ROWS}-{INDEX_DIST_TAG}-G{BAG_GROUP}/default"
+expect_spm = false
+
+[kernel.verify]
+expect_dma = false
+
+[params]
+B = 4
+L_MAX = 8
+D = 64
+NUM_ROWS = 4096
+# 0 = uniform, 1 = zipf-like (hot 1% accounts for ~50% of lookups).
+INDEX_DIST = 0
+INDEX_DIST_TAG = "uniform"
+# Number of consecutive bags handled by a single program.  BAG_GROUP=1
+# is the v1 / C1 single-buffer shape; BAG_GROUP>=2 exercises the C2
+# ping-pong lowering.
+BAG_GROUP = 1
+CHECK_RESULT = 1
+FLUSH_BEFORE_ROI = 1
+
+[build]
+c_macros = [
+    "EMB_B={B}",
+    "EMB_L_MAX={L_MAX}",
+    "EMB_D={D}",
+    "EMB_NUM_ROWS={NUM_ROWS}",
+    "EMB_INDEX_DIST={INDEX_DIST}",
+    "EMB_BAG_GROUP={BAG_GROUP}",
+    "EMB_FLUSH_BEFORE_ROI={FLUSH_BEFORE_ROI}",
+    "CHECK_RESULT={CHECK_RESULT}",
+]
+
+[presets.smoke]
+B = 4
+L_MAX = 8
+D = 64
+NUM_ROWS = 4096
+INDEX_DIST = 0
+INDEX_DIST_TAG = "uniform"
+BAG_GROUP = 1
+CHECK_RESULT = 1
+FLUSH_BEFORE_ROI = 1
+
+[presets.small]
+B = 32
+L_MAX = 16
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 0
+INDEX_DIST_TAG = "uniform"
+BAG_GROUP = 1
+CHECK_RESULT = 1
+FLUSH_BEFORE_ROI = 1
+
+[presets.small-skew]
+B = 32
+L_MAX = 16
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 1
+INDEX_DIST_TAG = "zipf"
+BAG_GROUP = 1
+CHECK_RESULT = 1
+FLUSH_BEFORE_ROI = 1
+
+[presets.medium]
+B = 64
+L_MAX = 32
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 1
+INDEX_DIST_TAG = "zipf"
+BAG_GROUP = 1
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 1
+
+[presets.large]
+B = 64
+L_MAX = 32
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 0
+INDEX_DIST_TAG = "uniform"
+BAG_GROUP = 1
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 1
+
+# --- C2 grouped-bag presets (double-buffered SPM lowering). -----------------
+#
+# These mirror the v1 presets but with BAG_GROUP > 1 so the indirect-tile
+# matcher sees an outer scf.for over bags and can ping-pong row staging.
+# small-g2 keeps CHECK_RESULT on to verify the C2 lowering numerically.
+
+[presets.small-g2]
+B = 32
+L_MAX = 16
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 0
+INDEX_DIST_TAG = "uniform"
+BAG_GROUP = 2
+CHECK_RESULT = 1
+FLUSH_BEFORE_ROI = 1
+
+[presets.medium-g2]
+B = 64
+L_MAX = 32
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 1
+INDEX_DIST_TAG = "zipf"
+BAG_GROUP = 2
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 1
+
+[presets.medium-g4]
+B = 64
+L_MAX = 32
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 1
+INDEX_DIST_TAG = "zipf"
+BAG_GROUP = 4
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 1
+
+[presets.medium-g8]
+B = 64
+L_MAX = 32
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 1
+INDEX_DIST_TAG = "zipf"
+BAG_GROUP = 8
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 1
+
+[presets.large-g2]
+B = 64
+L_MAX = 32
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 0
+INDEX_DIST_TAG = "uniform"
+BAG_GROUP = 2
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 1
+
+[presets.large-g4]
+B = 64
+L_MAX = 32
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 0
+INDEX_DIST_TAG = "uniform"
+BAG_GROUP = 4
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 1
+
+[presets.large-g8]
+B = 64
+L_MAX = 32
+D = 64
+NUM_ROWS = 65536
+INDEX_DIST = 0
+INDEX_DIST_TAG = "uniform"
+BAG_GROUP = 8
+CHECK_RESULT = 0
+FLUSH_BEFORE_ROI = 1
+
+[sweeps.blocking]
+values = [
+    { name = "default" },
+]
+tag_template = "B{B}-L{L_MAX}-D{D}-R{NUM_ROWS}-{INDEX_DIST_TAG}-G{BAG_GROUP}/default"

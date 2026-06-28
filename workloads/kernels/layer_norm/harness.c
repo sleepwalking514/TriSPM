@@ -1,0 +1,194 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "layer_norm_launcher.h"
+#include "libspm.h"
+
+/*
+ * Test harness for the Triton-compiled layer_norm kernel.
+ *
+ * Build with -DM=32 -DN=64 -DBLOCK_N=8 (rendered from experiment.toml
+ * by run_experiment.py).
+ */
+
+#ifndef M
+#error "M must be defined via -D flag"
+#endif
+#ifndef N
+#error "N must be defined via -D flag"
+#endif
+#ifndef BLOCK_N
+#error "BLOCK_N must be defined via -D flag"
+#endif
+#ifndef CHECK_RESULT
+#define CHECK_RESULT 1
+#endif
+#ifndef LAYERNORM_FLUSH_BEFORE_ROI
+#define LAYERNORM_FLUSH_BEFORE_ROI 1
+#endif
+#ifndef LAYERNORM_SPM_ROW_BLOCK
+#define LAYERNORM_SPM_ROW_BLOCK 1
+#endif
+#ifndef LAYERNORM_SPM_ROW_GROUP_BLOCKS
+#define LAYERNORM_SPM_ROW_GROUP_BLOCKS 1
+#endif
+#ifndef LAYERNORM_SPM_INTERNAL_ROW_BLOCK
+#define LAYERNORM_SPM_INTERNAL_ROW_BLOCK 0
+#endif
+#define LAYERNORM_SPM_EFFECTIVE_INTERNAL_ROW_BLOCK \
+    (LAYERNORM_SPM_INTERNAL_ROW_BLOCK && (BLOCK_N < N))
+
+static volatile int layer_norm_check_result = 1;
+
+#if (N % BLOCK_N) != 0
+#error "layer_norm workload requires N to be divisible by BLOCK_N"
+#endif
+#if LAYERNORM_SPM_EFFECTIVE_INTERNAL_ROW_BLOCK
+#if LAYERNORM_SPM_ROW_BLOCK <= 1
+#error "SPM internal row-block layer_norm requires LAYERNORM_SPM_ROW_BLOCK > 1"
+#endif
+#if LAYERNORM_SPM_ROW_GROUP_BLOCKS <= 0
+#error "SPM internal row-block layer_norm requires LAYERNORM_SPM_ROW_GROUP_BLOCKS > 0"
+#endif
+#if (M % (LAYERNORM_SPM_ROW_BLOCK * LAYERNORM_SPM_ROW_GROUP_BLOCKS)) != 0
+#error "SPM internal row-block layer_norm requires M divisible by row-block * row-group-blocks"
+#endif
+#endif
+
+static int layer_norm_grid_x(void)
+{
+#if LAYERNORM_SPM_EFFECTIVE_INTERNAL_ROW_BLOCK
+    return M / (LAYERNORM_SPM_ROW_BLOCK * LAYERNORM_SPM_ROW_GROUP_BLOCKS);
+#endif
+    return M;
+}
+
+static const char *layer_norm_schedule_name(void)
+{
+#if LAYERNORM_SPM_EFFECTIVE_INTERNAL_ROW_BLOCK
+    return "canonical+spm_row_block";
+#else
+    return "canonical";
+#endif
+}
+
+int main(void)
+{
+    layer_norm_check_result = CHECK_RESULT;
+    int grid_x = layer_norm_grid_x();
+
+    printf("layer_norm: schedule=%s  M=%d  N=%d  BLOCK_N=%d  spm_ROW_BLOCK=%d  spm_ROW_GROUP_BLOCKS=%d  spm_INTERNAL_ROW_BLOCK=%d  gridX=%d  flush=%d  check=%d\n",
+           layer_norm_schedule_name(), M, N, BLOCK_N, LAYERNORM_SPM_ROW_BLOCK,
+           LAYERNORM_SPM_ROW_GROUP_BLOCKS,
+           LAYERNORM_SPM_EFFECTIVE_INTERNAL_ROW_BLOCK, grid_x,
+           LAYERNORM_FLUSH_BEFORE_ROI, layer_norm_check_result);
+
+    size_t x_bytes = (size_t)M * N * sizeof(float);
+    size_t param_bytes = (size_t)N * sizeof(float);
+
+    float *x_shadow = (float *)malloc(x_bytes);
+    float *gamma_shadow = (float *)malloc(param_bytes);
+    float *beta_shadow = (float *)malloc(param_bytes);
+    float *x     = (float *)layer_norm_alloc(0, x_bytes);
+    float *gamma = (float *)layer_norm_alloc(1, param_bytes);
+    float *beta  = (float *)layer_norm_alloc(2, param_bytes);
+    float *out   = (float *)layer_norm_alloc(3, x_bytes);
+    float *ref = NULL;
+
+    if (!x_shadow || !gamma_shadow || !beta_shadow || !x || !gamma || !beta || !out) {
+        fprintf(stderr, "malloc failed\n");
+        return 1;
+    }
+
+    /* Deterministic init on private shadow buffers.  The measured buffers are
+     * launcher-selected, while scalar init/reference stay outside the ROI. */
+    for (int i = 0; i < M * N; i++)
+        x_shadow[i] = (float)((i % 23) - 11) * 0.1f;
+    for (int j = 0; j < N; j++) {
+        gamma_shadow[j] = 0.8f + (float)(j % 5) * 0.1f;   /* 0.8 .. 1.2 */
+        beta_shadow[j]  = (float)(j % 3) * 0.05f;         /* 0.0, 0.05, 0.10 */
+    }
+
+    flush_caches();
+    publish_input(x, x_shadow, x_bytes);
+    publish_input(gamma, gamma_shadow, param_bytes);
+    publish_input(beta, beta_shadow, param_bytes);
+
+    memset(out, 0, x_bytes);
+
+    if (LAYERNORM_FLUSH_BEFORE_ROI)
+        flush_caches();
+
+    /* Measure only the Triton kernel ROI; init/ref/publish/check stay outside. */
+    m5_reset_stats(0, 0);
+
+    layer_norm_launch(grid_x, 1, 1, x, gamma, beta, out);
+
+    m5_dump_stats(0, 0);
+
+    int errors = 0;
+    if (layer_norm_check_result) {
+        ref = (float *)malloc(x_bytes);
+        if (!ref) {
+            fprintf(stderr, "malloc failed\n");
+            free(x_shadow);
+            free(gamma_shadow);
+            free(beta_shadow);
+            layer_norm_free_all();
+            return 1;
+        }
+
+        /* Reference layer-norm on private shadow buffers after the measured ROI. */
+        for (int i = 0; i < M; i++) {
+            float mean = 0.0f;
+            for (int j = 0; j < N; j++)
+                mean += x_shadow[i * N + j];
+            mean /= N;
+
+            float var = 0.0f;
+            for (int j = 0; j < N; j++) {
+                float d = x_shadow[i * N + j] - mean;
+                var += d * d;
+            }
+            var /= N;
+
+            float inv_std = 1.0f / sqrtf(var + 1e-5f);
+
+            for (int j = 0; j < N; j++) {
+                ref[i * N + j] =
+                    (x_shadow[i * N + j] - mean) * inv_std
+                    * gamma_shadow[j] + beta_shadow[j];
+            }
+        }
+
+        for (int i = 0; i < M * N; i++) {
+            if (fabsf(out[i] - ref[i]) > 1e-4f) {
+                if (errors < 10) {
+                    int row = i / N, col = i % N;
+                    printf("MISMATCH [%d,%d]: got %.6f, expected %.6f\n",
+                           row, col, out[i], ref[i]);
+                }
+                errors++;
+            }
+        }
+
+        if (errors == 0)
+            printf("PASS: all %d elements correct\n", M * N);
+        else
+            printf("FAIL: %d / %d mismatches\n", errors, M * N);
+
+        free(ref);
+    } else {
+        printf("SKIP: result check disabled\n");
+    }
+
+    free(x_shadow);
+    free(gamma_shadow);
+    free(beta_shadow);
+    layer_norm_free_all();
+
+    return (errors > 0) ? 1 : 0;
+}
