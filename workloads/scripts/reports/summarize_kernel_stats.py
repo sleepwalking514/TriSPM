@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
-import compare_stats
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from internal import compare_stats
 
 
 FIELDS = [

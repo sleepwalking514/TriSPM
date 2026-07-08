@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and optionally run the paper experiment matrix.
-
-This runner is intentionally paper-scoped: it encodes the reproducible table
-rows on top of the tuned defaults, without pulling in the older
-ablation-heavy fresh-eval profiles.
-"""
+"""Generate and optionally run the paper experiment matrix."""
 from __future__ import annotations
 
 import argparse
@@ -22,10 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from trispm_paths import WORKLOADS_DIR
+from internal.trispm_paths import WORKLOADS_DIR
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+INTERNAL_DIR = SCRIPTS_DIR / "internal"
 CAMPAIGN_ROOT = WORKLOADS_DIR / "m5out" / "campaigns"
 PHASE_ORDER = [
     "kernel-headline",
@@ -282,7 +278,7 @@ def graph_spm_run_cmd(
 ) -> list[str]:
     cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "graph_placement.py"),
+        str(INTERNAL_DIR / "graph_placement.py"),
         graph,
         "--mode",
         "run",
@@ -578,7 +574,7 @@ def graph_profile_rows() -> list[Row]:
                 "preset": "large_profile",
                 "spm_tag": "paper-profile",
                 "artifact_tag": "paper-profile",
-                "postprocess": "summarize_kernel_stats.py",
+                "postprocess": "reports/summarize_kernel_stats.py",
             },
         )
     ]
@@ -1260,9 +1256,9 @@ def apply_artifact_suffix(rows: list[Row], suffix: str) -> list[Row]:
         if command and command[1].endswith("run_experiment.py"):
             if "--tag" in command:
                 index = command.index("--tag") + 1
-                old_tag = command[index]
+                previous_tag = command[index]
                 command[index] = suffix_tag(command[index], suffix)
-                if metadata.get("generic_spm_tag") == old_tag:
+                if metadata.get("generic_spm_tag") == previous_tag:
                     metadata["generic_spm_tag"] = command[index]
         elif command and command[1].endswith("graph_eval.py"):
             row_suffix = f"{suffix}-{row.phase}-{row.workload}-{row.label}"
@@ -1512,7 +1508,11 @@ def run_rows(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--campaign", default="paper-experiments")
+    parser.add_argument(
+        "--campaign",
+        default="paper-experiments",
+        help="name for the output experiment set under workloads/m5out/campaigns",
+    )
     parser.add_argument("--phase", action="append", default=[], help="phase to include; repeatable")
     parser.add_argument(
         "--from-phase",

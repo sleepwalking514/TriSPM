@@ -19,7 +19,7 @@ from typing import Any
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-WORKLOADS_DIR = SCRIPTS_DIR.parent
+WORKLOADS_DIR = SCRIPTS_DIR.parents[1]
 GRAPHS_DIR = WORKLOADS_DIR / "graphs"
 
 SEQ = 512
@@ -48,6 +48,7 @@ SCALED_CASES = {
         "head_dim": 64,
         "ffn_dim": 2048,
         "fixed_policy": False,
+        "checked_in_mh8_layout": True,
     },
     "large": {
         "name": "decoder_canonical_large_mh16",
@@ -193,6 +194,7 @@ SCALE_MATMUL_ROLE_OVERRIDES = {
 }
 MATMUL_ROLE_OVERRIDES = BASE_MATMUL_ROLE_OVERRIDES
 CURRENT_FIXED_POLICY = False
+CURRENT_CHECKED_IN_MH8_LAYOUT = False
 TRISPM_ROW_BLOCK_PARAMS = {
     "SPM_ROW_BLOCK": 4,
     "SPM_ROW_GROUP_BLOCKS": 8,
@@ -232,10 +234,19 @@ def write_table(lines: list[str], table: str, values: dict[str, Any]) -> None:
         lines.append(f"{key} = {toml_value(value)}")
 
 
-def set_shape(seq: int, heads: int, d_model: int, head_dim: int, ffn_dim: int,
-              graph_name: str, fixed_policy: bool = False) -> None:
+def set_shape(
+    seq: int,
+    heads: int,
+    d_model: int,
+    head_dim: int,
+    ffn_dim: int,
+    graph_name: str,
+    fixed_policy: bool = False,
+    checked_in_mh8_layout: bool = False,
+) -> None:
     global SEQ, HEADS, D_MODEL, HEAD_DIM, FFN_DIM, GRAPH_NAME, OUT_DIR
     global MATMUL_ROLE_OVERRIDES, CURRENT_FIXED_POLICY
+    global CURRENT_CHECKED_IN_MH8_LAYOUT
     if heads <= 0 or heads % 2 != 0:
         raise ValueError("HEADS must be a positive even number")
     if d_model != heads * head_dim:
@@ -247,6 +258,11 @@ def set_shape(seq: int, heads: int, d_model: int, head_dim: int, ffn_dim: int,
     FFN_DIM = ffn_dim
     GRAPH_NAME = graph_name
     OUT_DIR = GRAPHS_DIR / graph_name
+    CURRENT_CHECKED_IN_MH8_LAYOUT = (
+        checked_in_mh8_layout
+        and graph_name == "decoder_canonical_mh8"
+        and heads == 8
+    )
     MATMUL_ROLE_OVERRIDES = {
         role: {
             "cache": dict(cfg["cache"]),
@@ -262,10 +278,18 @@ def set_shape(seq: int, heads: int, d_model: int, head_dim: int, ffn_dim: int,
 
 
 def head_pair_name(left: int, right: int) -> str:
+    if CURRENT_CHECKED_IN_MH8_LAYOUT:
+        if left == 0 and right == HEADS - 1:
+            return "attn_head_sum_all"
+        head_range = "".join(str(head) for head in range(left, right + 1))
+        return f"attn_head_sum_{head_range}"
     return f"attn_head_sum_{left}_{right}"
 
 
 def head_pair_tensor_name(left: int, right: int) -> str:
+    if CURRENT_CHECKED_IN_MH8_LAYOUT:
+        head_range = "".join(str(head) for head in range(left, right + 1))
+        return f"attn_sum_{head_range}"
     return f"attn_sum_{left}_{right}"
 
 
@@ -324,6 +348,14 @@ def head_sum_consumers(plan: list[dict[str, Any]]) -> dict[str, list[str]]:
 def ref_expr(tensor: str) -> str:
     if tensor.startswith("attn_proj_h"):
         return f"attn_proj_ref[{int(tensor.removeprefix('attn_proj_h'))}]"
+    if CURRENT_CHECKED_IN_MH8_LAYOUT and tensor.startswith("attn_sum_"):
+        return f"sum{tensor.removeprefix('attn_sum_')}_ref"
+    return f"{tensor}_ref"
+
+
+def sum_ref_name(tensor: str) -> str:
+    if CURRENT_CHECKED_IN_MH8_LAYOUT and tensor.startswith("attn_sum_"):
+        return f"sum{tensor.removeprefix('attn_sum_')}_ref"
     return f"{tensor}_ref"
 
 
@@ -344,14 +376,18 @@ def matmul_params(m: int, n: int, k: int, role: str) -> dict[str, int]:
 
 
 def layer_norm_params() -> dict[str, int]:
-    return {
+    params = {
         "M": SEQ,
         "N": D_MODEL,
-        "BLOCK_N": 8,
+    }
+    if not CURRENT_CHECKED_IN_MH8_LAYOUT:
+        params["BLOCK_N"] = 8
+    params.update({
         "CHECK_RESULT": 0,
         "LAYERNORM_FLUSH_BEFORE_ROI": 1,
         **TRISPM_ROW_BLOCK_PARAMS,
-    }
+    })
+    return params
 
 
 def add_matmul_overrides(node: dict[str, Any], role: str) -> dict[str, Any]:
@@ -365,18 +401,14 @@ def add_matmul_overrides(node: dict[str, Any], role: str) -> dict[str, Any]:
 
 
 def add_row_block_overrides(node: dict[str, Any]) -> dict[str, Any]:
-    node["cache"] = {
-        "params": {
-            "BLOCK_N": D_MODEL,
-            **CACHE_ROW_BLOCK_PARAMS,
-        }
-    }
-    node["spm"] = {
-        "params": {
-            "BLOCK_N": 8,
-            **TRISPM_ROW_BLOCK_PARAMS,
-        }
-    }
+    if CURRENT_CHECKED_IN_MH8_LAYOUT:
+        cache_params = dict(CACHE_ROW_BLOCK_PARAMS)
+        spm_params = dict(TRISPM_ROW_BLOCK_PARAMS)
+    else:
+        cache_params = {"BLOCK_N": D_MODEL, **CACHE_ROW_BLOCK_PARAMS}
+        spm_params = {"BLOCK_N": 8, **TRISPM_ROW_BLOCK_PARAMS}
+    node["cache"] = {"params": cache_params}
+    node["spm"] = {"params": spm_params}
     return node
 
 
@@ -715,7 +747,7 @@ def render_graph_toml() -> str:
         "[graph]",
         f'name = "{GRAPH_NAME}"',
         (
-            f'description = "{HEADS}-head causal decoder-block graph using canonical '
+            f'description = "{"Eight-head" if CURRENT_CHECKED_IN_MH8_LAYOUT else f"{HEADS}-head"} causal decoder-block graph using canonical '
             'attention per head: layer_norm -> per-head q/k/v -> k_transpose -> '
             'qk -> causal softmax -> pv -> per-head o_proj -> head-sum -> '
             'residual_add -> layer_norm -> ffn_up -> activation -> ffn_down -> '
@@ -782,18 +814,30 @@ def render_graph_toml() -> str:
             if mode_cfg.get("env"):
                 write_table(lines, f"nodes.{node}.{mode}.env", mode_cfg["env"])
 
-    write_table(lines, "presets.large.graph", {
-        "description": (
+    if CURRENT_CHECKED_IN_MH8_LAYOUT:
+        large_description = (
+            "Large eight-head canonical decoder block at "
+            f"s{SEQ} d{D_MODEL} heads{HEADS} head_dim{HEAD_DIM} ffn{FFN_DIM}."
+        )
+        profile_description = (
+            "Profiling preset for the large eight-head canonical decoder block. "
+            "The harness dumps and resets gem5 stats after each kernel launch."
+        )
+    else:
+        large_description = (
             f"Canonical decoder block at s{SEQ} d{D_MODEL} heads{HEADS} "
             f"head_dim{HEAD_DIM} ffn{FFN_DIM}."
         )
-    })
-    write_table(lines, "presets.large_profile.graph", {
-        "description": (
+        profile_description = (
             f"Profiling preset for the {HEADS}-head canonical decoder block. "
             "The harness dumps and resets gem5 stats after each kernel launch."
         )
-    })
+    write_table(lines, "presets.large.graph", {"description": large_description})
+    write_table(
+        lines,
+        "presets.large_profile.graph",
+        {"description": profile_description},
+    )
     write_table(lines, "presets.large_profile.harness.params", {
         "DUMP_KERNEL_STATS": 1,
         "CHECK_RESULT": 0,
@@ -828,18 +872,18 @@ def render_harness_c() -> str:
         for record in sum_plan
     )
     sum_ref_decls = "\n        ".join(
-        f'float *{record["output"]}_ref = (float *)malloc(model_bytes);'
+        f'float *{sum_ref_name(str(record["output"]))} = (float *)malloc(model_bytes);'
         for record in sum_plan
     )
     sum_ref_failed_checks = "\n            ".join(
-        f'|| !{record["output"]}_ref' for record in sum_plan
+        f'|| !{sum_ref_name(str(record["output"]))}' for record in sum_plan
     )
     sum_ref_frees = "\n            ".join(
-        f'free({record["output"]}_ref);'
+        f'free({sum_ref_name(str(record["output"]))});'
         for record in sum_plan
     )
     sum_ref_compute = "\n        ".join(
-        f'reference_residual_add({ref_expr(str(record["left"]))}, {ref_expr(str(record["right"]))}, {record["output"]}_ref, MODEL_ELEMS);'
+        f'reference_residual_add({ref_expr(str(record["left"]))}, {ref_expr(str(record["right"]))}, {sum_ref_name(str(record["output"]))}, MODEL_ELEMS);'
         for record in sum_plan
     )
     q_allocs = symbol_list("q_proj", "alloc")
@@ -866,6 +910,14 @@ def render_harness_c() -> str:
     sm_frees = symbol_list("softmax", "free_all")
     pv_frees = symbol_list("pv", "free_all")
     o_frees = symbol_list("o_proj", "free_all")
+    head_guard = (
+        f"""#if GRAPH_HEADS != {HEADS}
+#error "{GRAPH_NAME} harness expects GRAPH_HEADS == {HEADS}"
+#endif
+"""
+        if CURRENT_CHECKED_IN_MH8_LAYOUT
+        else ""
+    )
 
     return f"""#include <math.h>
 #include <stdint.h>
@@ -1005,7 +1057,7 @@ static void dump_kernel_stats(const char *label)
 #define KERNEL_DONE(label) TRACE_STEP(label)
 #endif
 
-#if GRAPH_D_MODEL != (GRAPH_HEADS * GRAPH_HEAD_DIM)
+{head_guard}#if GRAPH_D_MODEL != (GRAPH_HEADS * GRAPH_HEAD_DIM)
 #error "{GRAPH_NAME} expects GRAPH_D_MODEL == GRAPH_HEADS * GRAPH_HEAD_DIM"
 #endif
 
@@ -1617,6 +1669,24 @@ int main(void)
 """
 
 
+def generate_case(cfg: dict[str, Any]) -> None:
+    set_shape(
+        int(cfg["seq"]),
+        int(cfg["heads"]),
+        int(cfg["d_model"]),
+        int(cfg["head_dim"]),
+        int(cfg["ffn_dim"]),
+        str(cfg["name"]),
+        bool(cfg["fixed_policy"]),
+        bool(cfg.get("checked_in_mh8_layout", False)),
+    )
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / "graph.toml").write_text(render_graph_toml())
+    (OUT_DIR / "harness.c").write_text(render_harness_c())
+    print(f"generated {OUT_DIR / 'graph.toml'}")
+    print(f"generated {OUT_DIR / 'harness.c'}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1647,20 +1717,7 @@ def main() -> None:
     if args.ffn_dim is not None:
         cfg["ffn_dim"] = args.ffn_dim
 
-    set_shape(
-        int(cfg["seq"]),
-        int(cfg["heads"]),
-        int(cfg["d_model"]),
-        int(cfg["head_dim"]),
-        int(cfg["ffn_dim"]),
-        str(cfg["name"]),
-        bool(cfg["fixed_policy"]),
-    )
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / "graph.toml").write_text(render_graph_toml())
-    (OUT_DIR / "harness.c").write_text(render_harness_c())
-    print(f"generated {OUT_DIR / 'graph.toml'}")
-    print(f"generated {OUT_DIR / 'harness.c'}")
+    generate_case(cfg)
 
 
 if __name__ == "__main__":

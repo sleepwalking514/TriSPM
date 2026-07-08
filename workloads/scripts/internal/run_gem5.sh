@@ -2,15 +2,15 @@
 # ============================================================
 # Run a compiled kernel on gem5.
 #
-# Usage:  ./scripts/run_gem5.sh <kernel> --mode {spm,cache} [--tag TAG] [gem5_flags...]
+# Usage:  ./scripts/internal/run_gem5.sh <kernel> --mode {spm,cache} [--tag TAG] [gem5_flags...]
 # Example:
-#   ./scripts/run_gem5.sh matmul --mode cache --cache_baseline
-#   ./scripts/run_gem5.sh matmul --mode spm --tag n256-bs32
+#   ./scripts/run_experiment.py matmul --mode cache
+#   ./scripts/run_experiment.py matmul --mode spm --tag n256-bs32
 # ============================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../env.sh"
+source "$SCRIPT_DIR/../../env.sh"
 
 KERNEL=""
 MODE=""
@@ -37,7 +37,7 @@ RUN_LOG="$(python3 "$SCRIPT_DIR/trispm_paths.py" run_log "$KERNEL" "$MODE" --tag
 
 if [ ! -f "$BINARY" ]; then
     echo "ERROR: binary not found: $BINARY" >&2
-    echo "       Run './scripts/build_kernel.sh $KERNEL --mode $MODE --tag $TAG' first." >&2
+    echo "       Run './scripts/run_experiment.py $KERNEL --mode build --tag $TAG' first." >&2
     exit 1
 fi
 [ -f "$GEM5" ] || { echo "ERROR: gem5 binary not found: $GEM5" >&2; exit 1; }

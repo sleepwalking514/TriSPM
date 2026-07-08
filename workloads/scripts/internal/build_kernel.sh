@@ -2,21 +2,21 @@
 # ============================================================
 # Build a Triton kernel for RISC-V.
 #
-# Usage:  ./scripts/build_kernel.sh <kernel> --mode {spm,cache} [--tag TAG]
+# Usage:  ./scripts/internal/build_kernel.sh <kernel> --mode {spm,cache} [--tag TAG]
 # Example:
-#   ./scripts/build_kernel.sh matmul --mode spm
-#   ./scripts/build_kernel.sh matmul --mode cache --tag n256-bs32
+#   ./scripts/run_experiment.py matmul --mode spm
+#   ./scripts/run_experiment.py matmul --mode cache --tag n256-bs32
 #
 # --mode cache: skip ConvertMemoryToSPM pass, build cache-baseline binary.
 # --tag:        artifact label rendered from the kernel's experiment.toml
 #               tag_template (slashes are flattened to '-' in build dirs).
 #               Build dir is workloads/build/<kernel>/<mode>-<flat-tag>/
-#               (single source of truth lives in scripts/trispm_paths.py).
+#               (single source of truth lives in scripts/internal/trispm_paths.py).
 # ============================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../env.sh"
+source "$SCRIPT_DIR/../../env.sh"
 
 KERNEL=""
 MODE=""

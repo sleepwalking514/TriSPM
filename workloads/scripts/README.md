@@ -1,35 +1,42 @@
 # Workload Scripts
 
-This directory contains the public workload control plane for TriSPM.  Keep the
-top level reserved for stable entry points that a fresh artifact user can run
-or inspect without knowing the paper development history.
+This directory contains the public workload control plane for TriSPM.  The top
+level is reserved for stable commands that users run directly.
 
-## Stable Entry Points
+## User Entry Points
 
 - `paper_experiments.py`: generates and optionally executes the reproducible
-  experiment matrix.
-- `run_experiment.py`: builds, runs, and compares one kernel manifest.
+  experiment matrix.  It writes a run plan, summary, and status files under
+  `workloads/m5out/campaigns/<name>/`.
+- `run_experiment.py`: builds, runs, verifies, and compares one kernel manifest.
 - `graph_eval.py`: runs graph-level SPM/cache comparisons and emits
   compact evaluation artifacts.
-- `graph_placement.py`: builds graph placement plans and graph run artifacts.
-- `build_kernel.sh` and `run_gem5.sh`: low-level build/run helpers used by the
-  Python drivers.
-- `compare_stats.py`: extracts the compact SPM-vs-cache statistics tables.
-- `trispm_paths.py`: shared repository-relative artifact path definitions.
 
-## Maintained Helpers
+Typical commands:
 
-- `generate_decoder_canonical_mh8.py`: regenerates canonical decoder graph
-  manifests.
-- `summarize_*.py`: post-processes already generated campaign or gem5 output.
+```bash
+./scripts/paper_experiments.py --campaign paper-experiments
+./scripts/paper_experiments.py --campaign paper-experiments --phase kernel-headline --run --jobs 4
+
+./scripts/run_experiment.py matmul --mode cache --preset steady --tag example-cache
+./scripts/run_experiment.py matmul --mode spm --preset steady --tag example-spm
+
+./scripts/graph_eval.py decoder_canonical_mh8 --preset large
+```
+
+## Supporting Code
+
+- `internal/`: helper implementation used by the user entry points, including
+  graph placement, low-level build/run scripts, stats comparison, and shared
+  artifact paths.
+- `generators/generate_decoder_canonical.py`: regenerates the canonical decoder
+  graph fixtures.  Use `--case small`, `--case base`, or `--case large`.
+- `reports/`: post-processes generated campaign or gem5 output.
 - `../tools/run_rvv.sh`: runs a built artifact on the RVV laptop path.
 
-## Historical Scripts
+## Extending Experiments
 
-Older phase wrappers, local evidence archivers, tuning sweeps, and root-level
-comparison runners were removed or folded into `paper_experiments.py`.  The
-repository keeps the public reproduction path through generated campaign rows
-instead of preserving one-off development commands.
-
-New experiments should normally be expressed through `paper_experiments.py` or
-`run_experiment.py` instead of adding another top-level ad hoc script.
+New kernel experiments should normally be expressed through a kernel
+`experiment.toml` plus `run_experiment.py`.  New graph experiments should use a
+graph manifest plus `graph_eval.py`, and paper-scale batches should be added as
+rows in `paper_experiments.py`.

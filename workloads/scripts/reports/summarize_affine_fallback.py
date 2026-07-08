@@ -9,7 +9,11 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-import trispm_paths
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from internal import trispm_paths
 
 
 def summarize_sidecar(path: Path, row: dict[str, object] | None = None) -> dict[str, object]:

@@ -8,8 +8,12 @@ import json
 import sys
 from pathlib import Path
 
-import compare_stats
-import trispm_paths
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from internal import compare_stats
+from internal import trispm_paths
 
 
 def rows_from_campaign(campaign: Path) -> list[dict[str, object]]:

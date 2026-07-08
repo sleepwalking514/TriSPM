@@ -13,10 +13,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-import compare_stats
-import graph_placement
-import trispm_paths
-from trispm_paths import WORKLOADS_DIR
+from internal import compare_stats
+from internal import graph_placement
+from internal import trispm_paths
+from internal.trispm_paths import WORKLOADS_DIR
+
+SCRIPTS_DIR = Path(__file__).resolve().parent
+INTERNAL_DIR = SCRIPTS_DIR / "internal"
 
 
 SUMMARY_STATS = [
@@ -129,7 +132,7 @@ def run_graph_compare(
 ) -> None:
     cmd = [
         sys.executable,
-        str(Path(__file__).resolve().parent / "graph_placement.py"),
+        str(INTERNAL_DIR / "graph_placement.py"),
         graph,
         "--mode",
         "compare",

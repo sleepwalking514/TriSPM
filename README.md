@@ -14,10 +14,6 @@ The public repository ties together three pieces:
 - `workloads/`: kernels, graph manifests, build/run helpers, and reproducible
   experiment drivers.
 
-Internal paper drafts, planning notes, archived logs, and generated evidence
-are intentionally kept outside the public artifact and ignored at the top
-level.
-
 ## Scope
 
 TriSPM is not a general-purpose scratchpad allocator and it is not primarily a
@@ -77,20 +73,30 @@ export RISCV_TOOLCHAIN_ROOT=/opt/riscv
 
 ## Running Experiments
 
-The main reproducibility entry point is the paper-scoped campaign generator:
+The main reproducibility entry point is the paper experiment campaign driver.
+A campaign is a named set of experiment rows; the name is used only to group the
+generated run plan, logs, status, and summaries under `workloads/m5out/`.
 
 ```bash
 cd workloads
 ./scripts/paper_experiments.py --campaign paper-experiments
 ```
 
-This writes the generated run plan under:
+The `--campaign` value names the output directory for the generated run plan:
 
 ```text
 workloads/m5out/campaigns/paper-experiments/
 ```
 
-Add `--run` to execute selected phases:
+By default this only writes the plan.  Add `--run` to execute selected rows.
+The common filters are:
+
+- `--phase`: include one phase, repeatable.
+- `--from-phase`: include a phase and every later phase in paper order.
+- `--label`: include rows whose label contains this substring, repeatable.
+- `--jobs`: run multiple independent rows concurrently.
+
+For example, run only the kernel headline phase:
 
 ```bash
 cd workloads
@@ -99,6 +105,18 @@ cd workloads
   --phase kernel-headline \
   --run \
   --jobs 4
+```
+
+Run a single labeled subset without overlapping existing outputs:
+
+```bash
+cd workloads
+./scripts/paper_experiments.py \
+  --campaign paper-experiments \
+  --phase graph-scale \
+  --label large \
+  --artifact-suffix trial1 \
+  --run
 ```
 
 Useful phases include:
@@ -133,16 +151,24 @@ cd workloads
 ./scripts/graph_eval.py decoder_canonical_mh8 --preset large_profile
 ```
 
+To regenerate canonical decoder graph fixtures:
+
+```bash
+cd workloads
+./scripts/generators/generate_decoder_canonical.py --case small
+./scripts/generators/generate_decoder_canonical.py --case base
+./scripts/generators/generate_decoder_canonical.py --case large
+```
+
 Generated binaries, gem5 outputs, logs, campaign plans, and comparison tables
 are written under `workloads/build/`, `workloads/m5out/`, and
 `workloads/logs/`.  These paths are local artifacts and are ignored by Git.
 
 ## Script Layout
 
-The stable workload commands live directly under `workloads/scripts/`.  One-off
-paper sweeps, historical diagnostics, and hand-written comparison runners are
-kept only when they preserve a useful reproduction path; see
-`workloads/scripts/README.md` for the current classification.
+The stable workload commands live directly under `workloads/scripts/`.  Helper
+implementation, graph generators, and report post-processors are grouped under
+subdirectories; see `workloads/scripts/README.md` for the current layout.
 
 ## Claim Boundaries
 

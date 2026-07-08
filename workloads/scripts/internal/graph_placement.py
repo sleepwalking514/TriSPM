@@ -3,15 +3,15 @@
 
 The graph planner sits above single-kernel SPM placement.  It reads tensor-edge
 metadata and keeps graph tensors on ordinary DRAM by default.  SPM kernels can
-still stage tiles with DMA internally, but launcher-visible DRAM allocation no
-longer has the legacy split backing model.
+still stage tiles with DMA internally; graph-visible tensors remain
+cache-backed interfaces between nodes.
 
 Usage:
-  scripts/graph_placement.py layer_norm_qkv --mode plan
-  scripts/graph_placement.py layer_norm_qkv --mode verify
-  scripts/graph_placement.py layer_norm_qkv --mode run
-  scripts/graph_placement.py layer_norm_qkv --mode compare
-  scripts/graph_placement.py layer_norm_qkv --mode fusion
+  scripts/internal/graph_placement.py layer_norm_qkv --mode plan
+  scripts/internal/graph_placement.py layer_norm_qkv --mode verify
+  scripts/internal/graph_placement.py layer_norm_qkv --mode run
+  scripts/internal/graph_placement.py layer_norm_qkv --mode compare
+  scripts/internal/graph_placement.py layer_norm_qkv --mode fusion
 """
 from __future__ import annotations
 
@@ -29,9 +29,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
+
 import run_experiment
-import trispm_paths
-from trispm_paths import WORKLOADS_DIR
+from internal import trispm_paths
+from internal.trispm_paths import WORKLOADS_DIR
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 GRAPHS_DIR = WORKLOADS_DIR / "graphs"
@@ -2041,15 +2045,15 @@ def verify_node(plan: NodePlan) -> bool:
     print(f"\n===== graph placement verify: {plan.name} ({plan.kernel}) =====")
     default_pattern = rf"default:\s+return\s+{re.escape(plan.kernel)}_arg_malloc\(arg_index,\s*nbytes\);"
     has_default_allocator = re.search(default_pattern, text) is not None
-    has_legacy_cases = re.search(
+    has_spm_allocator_overrides = re.search(
         r"case\s+\d+:\s+return\s+(?:spm_malloc|dma_buf_malloc)\(nbytes\);",
         text,
     ) is not None
     print(
         f"  [{'PASS' if has_default_allocator else 'FAIL'}] ordinary DRAM default allocator")
     print(
-        f"  [{'FAIL' if has_legacy_cases else 'PASS'}] no legacy allocator cases")
-    return has_default_allocator and not has_legacy_cases
+        f"  [{'FAIL' if has_spm_allocator_overrides else 'PASS'}] no SPM-only allocator overrides")
+    return has_default_allocator and not has_spm_allocator_overrides
 
 
 def plan_as_rows(plans: list[NodePlan]) -> list[tuple[str, str, str, str]]:

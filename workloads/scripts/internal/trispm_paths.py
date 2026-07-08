@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-WORKLOADS_DIR = Path(__file__).resolve().parent.parent
+WORKLOADS_DIR = Path(__file__).resolve().parents[2]
 BUILD_ROOT = WORKLOADS_DIR / "build"
 M5OUT_ROOT = WORKLOADS_DIR / "m5out"
 

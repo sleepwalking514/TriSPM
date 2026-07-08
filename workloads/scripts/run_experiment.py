@@ -30,10 +30,11 @@ import sys
 import tomllib
 from pathlib import Path
 
-import trispm_paths
-from trispm_paths import WORKLOADS_DIR
+from internal import trispm_paths
+from internal.trispm_paths import WORKLOADS_DIR
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+INTERNAL_DIR = SCRIPTS_DIR / "internal"
 
 
 def load_manifest(kernel: str) -> dict:
@@ -104,11 +105,11 @@ def parse_bool_param(params: dict[str, str], name: str, default: bool) -> bool:
 
 
 def do_build(kernel: str, mode: str, tag: str, env: dict[str, str]) -> None:
-    run([str(SCRIPTS_DIR / "build_kernel.sh"), kernel, "--mode", mode, "--tag", tag], env=env)
+    run([str(INTERNAL_DIR / "build_kernel.sh"), kernel, "--mode", mode, "--tag", tag], env=env)
 
 
 def do_run(kernel: str, mode: str, tag: str, gem5_flags: list[str], env: dict[str, str]) -> None:
-    cmd = [str(SCRIPTS_DIR / "run_gem5.sh"), kernel, "--mode", mode, "--tag", tag]
+    cmd = [str(INTERNAL_DIR / "run_gem5.sh"), kernel, "--mode", mode, "--tag", tag]
     if gem5_flags:
         cmd += ["--"] + gem5_flags
     run(cmd, env=env)
@@ -238,7 +239,7 @@ def do_compare_stats(
     spm_only = spm_only_out or trispm_paths.spm_stats_path(kernel, spm_tag)
     cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "compare_stats.py"),
+        str(INTERNAL_DIR / "compare_stats.py"),
         "--spm", str(spm_stats),
         "--cache", str(cache_stats),
         "--measure-iters", str(measure_iters),
