@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize generic affine-tile fallback evidence from promotion sidecars."""
+"""Summarize generic affine-tile stream evidence from promotion sidecars."""
 from __future__ import annotations
 
 import argparse
@@ -71,7 +71,7 @@ def rows_from_campaign(campaign: Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for row in payload.get("rows", []):
         command = row.get("command", [])
-        if row.get("phase") != "generic-affine-fallback":
+        if row.get("phase") != "generic-affine-build":
             continue
         if "--tag" not in command:
             continue

@@ -24,24 +24,23 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 INTERNAL_DIR = SCRIPTS_DIR / "internal"
 CAMPAIGN_ROOT = WORKLOADS_DIR / "m5out" / "campaigns"
 PHASE_ORDER = [
-    "kernel-headline",
-    "graph-headline",
+    "single-kernel-results",
+    "main-graph-result",
     "graph-scale",
-    "graph-hw-sensitivity",
-    "graph-profile",
-    "softmax-fairness",
-    "attention-algorithm-fairness",
-    "generic-affine-fallback",
-    "generic-affine-fallback-perf",
-    "gemm-tuning-mechanism",
-    "split",
-    "cache-capacity-fairness",
-    "xspm-instruction",
+    "graph-hardware-sensitivity",
+    "graph-attribution",
+    "softmax-algorithm-controls",
+    "attention-algorithm-controls",
+    "generic-affine-build",
+    "generic-affine-performance",
+    "gemm-tuning",
+    "graph-cache-capacity",
+    "graph-xspm-variant",
 ]
 SERIAL_PHASES = {
-    "graph-headline",
-    "graph-hw-sensitivity",
-    "graph-profile",
+    "main-graph-result",
+    "graph-hardware-sensitivity",
+    "graph-attribution",
 }
 
 MACHINES = {
@@ -95,17 +94,10 @@ SPM_MATMUL_ENV = {
     "TRITON_SPM_PROMOTION_REPORT": 1,
 }
 
-GENERIC_AFFINE_FALLBACK_ENV = {
+GENERIC_AFFINE_STREAM_ENV = {
     "TRITON_SPM_PROMOTION_REPORT": 1,
     "TRITON_SPM_GENERIC_AFFINE_TILE_MIN_BYTES": 0,
 }
-
-NO_SPLIT_MATMUL_ENV = {
-    "TRITON_MICRO_M": 32,
-    "TRITON_SPM_WINDOW_K": 1,
-    "TRITON_SPM_PROMOTION_REPORT": 1,
-}
-
 
 @dataclass(frozen=True)
 class Row:
@@ -307,7 +299,7 @@ def matmul_tag(role: str, mode: str, cfg: dict[str, int], suffix: str) -> str:
     )
 
 
-def kernel_headline_rows() -> list[Row]:
+def single_kernel_results_rows() -> list[Row]:
     rows: list[Row] = []
     for role, record in MATMUL_BEST.items():
         for mode, machine in (("cache", "Cache-base"), ("spm", "TriSPM")):
@@ -316,7 +308,7 @@ def kernel_headline_rows() -> list[Row]:
             env = SPM_MATMUL_ENV if mode == "spm" else None
             tag = matmul_tag(role, mode, cfg, "")
             rows.append(Row(
-                "kernel-headline",
+                "single-kernel-results",
                 "matmul",
                 f"{role}-{mode}-best",
                 kernel_cmd("matmul", mode, params, tag=tag, machine=machine, env=env),
@@ -354,7 +346,7 @@ def kernel_headline_rows() -> list[Row]:
         ),
     ):
         rows.append(Row(
-            "kernel-headline",
+            "single-kernel-results",
             "layer_norm",
             f"decoder-ln-{mode}-best",
             kernel_cmd("layer_norm", mode, params, tag=tag, machine=machine, env=env),
@@ -392,7 +384,7 @@ def kernel_headline_rows() -> list[Row]:
         ),
     ):
         rows.append(Row(
-            "kernel-headline",
+            "single-kernel-results",
             "softmax",
             f"decoder-attn-{mode}-best",
             kernel_cmd("softmax", mode, params, tag=tag, machine=machine, env=env),
@@ -407,11 +399,11 @@ def kernel_headline_rows() -> list[Row]:
     return rows
 
 
-def graph_headline_rows() -> list[Row]:
+def main_graph_result_rows() -> list[Row]:
     spm_tag = "paper-decoder-best"
     rows = [
         Row(
-            "graph-headline",
+            "main-graph-result",
             "decoder_canonical_mh8",
             "large-TriSPM-vs-Cache-base",
             graph_cmd("decoder_canonical_mh8", preset="large", machine="TriSPM", spm_tag=spm_tag),
@@ -424,7 +416,7 @@ def graph_headline_rows() -> list[Row]:
             metadata={"graph": "decoder_canonical_mh8", "preset": "large", "spm_tag": spm_tag},
         ),
         Row(
-            "cache-capacity-fairness",
+            "graph-cache-capacity",
             "decoder_canonical_mh8",
             "large-TriSPM-vs-Cache-capacity",
             graph_cmd("decoder_canonical_mh8", preset="large", machine="Cache-capacity", spm_tag=spm_tag, skip_build=True),
@@ -437,7 +429,7 @@ def graph_headline_rows() -> list[Row]:
             metadata={"graph": "decoder_canonical_mh8", "preset": "large", "spm_tag": spm_tag},
         ),
         Row(
-            "cache-capacity-fairness",
+            "graph-cache-capacity",
             "decoder_canonical_mh8",
             "large-TriSPM-vs-Cache-stress",
             graph_cmd("decoder_canonical_mh8", preset="large", machine="Cache-stress", spm_tag=spm_tag, skip_build=True),
@@ -502,7 +494,7 @@ def graph_scale_rows() -> list[Row]:
     ]
 
 
-def graph_hw_sensitivity_rows() -> list[Row]:
+def graph_hardware_sensitivity_rows() -> list[Row]:
     graph = "decoder_canonical_mh8"
     preset = "large"
     rows: list[Row] = []
@@ -521,7 +513,7 @@ def graph_hw_sensitivity_rows() -> list[Row]:
     )
     for variant, label, spm_tag, gem5_flags, skip_build in variants:
         rows.append(Row(
-            "graph-hw-sensitivity",
+            "graph-hardware-sensitivity",
             graph,
             label,
             graph_spm_run_cmd(
@@ -535,7 +527,7 @@ def graph_hw_sensitivity_rows() -> list[Row]:
             "TriSPM",
             "graph-spm-run",
             paper_table=True,
-            comparison="graph-hw-sensitivity",
+            comparison="graph-hardware-sensitivity",
             estimated_minutes=80,
             metadata={
                 "graph": graph,
@@ -549,11 +541,11 @@ def graph_hw_sensitivity_rows() -> list[Row]:
     return rows
 
 
-def graph_profile_rows() -> list[Row]:
+def graph_attribution_rows() -> list[Row]:
     graph = "decoder_canonical_mh8"
     return [
         Row(
-            "graph-profile",
+            "graph-attribution",
             graph,
             "large-profile-TriSPM-vs-Cache-base",
             graph_cmd(
@@ -565,7 +557,7 @@ def graph_profile_rows() -> list[Row]:
             ),
             "compare",
             "TriSPM",
-            "graph-profile",
+            "graph-attribution",
             paper_table=False,
             comparison="per-kernel-attribution",
             estimated_minutes=120,
@@ -580,11 +572,11 @@ def graph_profile_rows() -> list[Row]:
     ]
 
 
-def softmax_fairness_rows() -> list[Row]:
+def softmax_algorithm_controls_rows() -> list[Row]:
     common = {"M": 512, "N": 512, "CHECK_RESULT": 0}
     rows: list[Row] = []
     rows.append(Row(
-        "softmax-fairness",
+        "softmax-algorithm-controls",
         "softmax",
         "canonical-cache-full-row",
         kernel_cmd(
@@ -602,7 +594,7 @@ def softmax_fairness_rows() -> list[Row]:
     ))
     for exp_cache in (0, 1):
         rows.append(Row(
-            "softmax-fairness",
+            "softmax-algorithm-controls",
             "softmax",
             f"canonical-spm-exp-cache-{exp_cache}",
             kernel_cmd(
@@ -620,7 +612,7 @@ def softmax_fairness_rows() -> list[Row]:
             metadata={"algorithm": "canonical", "exp_cache": exp_cache},
         ))
     rows.append(Row(
-        "softmax-fairness",
+        "softmax-algorithm-controls",
         "softmax_online",
         "online-cache-bn32",
         kernel_cmd(
@@ -637,7 +629,7 @@ def softmax_fairness_rows() -> list[Row]:
         metadata={"algorithm": "online"},
     ))
     rows.append(Row(
-        "softmax-fairness",
+        "softmax-algorithm-controls",
         "softmax_online",
         "online-spm-bn32",
         kernel_cmd(
@@ -661,11 +653,11 @@ def softmax_fairness_rows() -> list[Row]:
     return rows
 
 
-def attention_fairness_rows() -> list[Row]:
+def attention_algorithm_controls_rows() -> list[Row]:
     rows: list[Row] = []
     canonical_tag = "paper-canonical-attention-s512h64-c1"
     rows.append(Row(
-        "attention-algorithm-fairness",
+        "attention-algorithm-controls",
         "canonical_attention",
         "canonical-graph-TriSPM-vs-Cache-base",
         graph_cmd("canonical_attention", preset="s512h64-c1", machine="TriSPM", spm_tag=canonical_tag),
@@ -691,7 +683,7 @@ def attention_fairness_rows() -> list[Row]:
         "FLUSH_BEFORE_ROI": 0,
     }
     rows.append(Row(
-        "attention-algorithm-fairness",
+        "attention-algorithm-controls",
         "flash_attention",
         "flash-kernel-cache-s512h64",
         kernel_cmd(
@@ -710,7 +702,7 @@ def attention_fairness_rows() -> list[Row]:
         metadata={"algorithm": "flash_attention", "shape": {"SEQ": 512, "HEAD_DIM": 64}},
     ))
     rows.append(Row(
-        "attention-algorithm-fairness",
+        "attention-algorithm-controls",
         "flash_attention",
         "flash-kernel-spm-headkv",
         kernel_cmd(
@@ -737,27 +729,27 @@ def attention_fairness_rows() -> list[Row]:
     return rows
 
 
-def generic_affine_fallback_rows() -> list[Row]:
+def generic_affine_build_rows() -> list[Row]:
     rows: list[Row] = []
     for role, record in MATMUL_BEST.items():
         cfg = dict(record["spm"])
         params = {**record["shape"], **cfg, "CHECK_RESULT": 0}
-        tag = matmul_tag(role, "generic-fallback", cfg, "")
+        tag = matmul_tag(role, "generic-affine", cfg, "")
         rows.append(Row(
-            "generic-affine-fallback",
+            "generic-affine-build",
             "matmul",
-            f"{role}-generic-fallback-build",
+            f"{role}-generic-affine-build",
             kernel_cmd(
                 "matmul",
                 "build",
                 params,
                 tag=tag,
                 machine="TriSPM",
-                env={**SPM_MATMUL_ENV, **GENERIC_AFFINE_FALLBACK_ENV},
+                env={**SPM_MATMUL_ENV, **GENERIC_AFFINE_STREAM_ENV},
             ),
             "build",
             "TriSPM",
-            "generic-fallback-build",
+            "generic-affine-build",
             paper_table=False,
             estimated_minutes=1,
             metadata={
@@ -765,7 +757,7 @@ def generic_affine_fallback_rows() -> list[Row]:
                 "role": role,
                 "shape": record["shape"],
                 "blocking": cfg,
-                "spm_policy": "generic-affine-fallback",
+                "spm_policy": "generic-affine-stream",
             },
         ))
 
@@ -776,8 +768,8 @@ def generic_affine_fallback_rows() -> list[Row]:
                 "SPM_ROW_BLOCK": 1, "SPM_ROW_GROUP_BLOCKS": 1,
                 "SPM_INTERNAL_ROW_BLOCK": 0,
             },
-            "512x512/paper-decoder-ln-generic-fallback-rb1-rg1",
-            "decoder-ln-generic-fallback-build",
+            "512x512/paper-decoder-ln-generic-affine-rb1-rg1",
+            "decoder-ln-generic-affine-build",
             "Table 3",
         ),
         (
@@ -786,13 +778,13 @@ def generic_affine_fallback_rows() -> list[Row]:
                 "SPM_ROW_BLOCK": 1, "SPM_ROW_GROUP_BLOCKS": 1,
                 "SPM_INTERNAL_ROW_BLOCK": 0,
             },
-            "512x512/paper-decoder-attn-softmax-generic-fallback-bn32-rb1-rg1",
-            "decoder-attn-softmax-generic-fallback-build",
+            "512x512/paper-decoder-attn-softmax-generic-affine-bn32-rb1-rg1",
+            "decoder-attn-softmax-generic-affine-build",
             "Table 3/Table 5",
         ),
     ):
         rows.append(Row(
-            "generic-affine-fallback",
+            "generic-affine-build",
             "layer_norm" if "ln" in label else "softmax",
             label,
             kernel_cmd(
@@ -801,67 +793,67 @@ def generic_affine_fallback_rows() -> list[Row]:
                 params,
                 tag=tag,
                 machine="TriSPM",
-                env=GENERIC_AFFINE_FALLBACK_ENV,
+                env=GENERIC_AFFINE_STREAM_ENV,
             ),
             "build",
             "TriSPM",
-            "generic-fallback-build",
+            "generic-affine-build",
             paper_table=False,
             estimated_minutes=1,
             metadata={
                 "source_table": source_table,
                 "shape": {"M": 512, "N": 512},
                 "params": params,
-                "spm_policy": "generic-affine-fallback",
+                "spm_policy": "generic-affine-stream",
             },
         ))
 
     common = {"M": 512, "N": 512, "CHECK_RESULT": 0}
     rows.append(Row(
-        "generic-affine-fallback",
+        "generic-affine-build",
         "softmax",
-        "canonical-softmax-generic-fallback-build",
+        "canonical-softmax-generic-affine-build",
         kernel_cmd(
             "softmax",
             "build",
             {**common, "BLOCK_N": 32, "SPM_ROW_BLOCK": 1,
              "SPM_ROW_GROUP_BLOCKS": 1, "SPM_INTERNAL_ROW_BLOCK": 0},
-            tag="512x512/paper-softmax-canonical-generic-fallback-bn32-rb1-rg1",
+            tag="512x512/paper-softmax-canonical-generic-affine-bn32-rb1-rg1",
             machine="TriSPM",
-            env=GENERIC_AFFINE_FALLBACK_ENV,
+            env=GENERIC_AFFINE_STREAM_ENV,
         ),
         "build",
         "TriSPM",
-        "generic-fallback-build",
+        "generic-affine-build",
         paper_table=False,
         estimated_minutes=1,
         metadata={
             "source_table": "Table 5",
             "algorithm": "canonical",
-            "spm_policy": "generic-affine-fallback",
+            "spm_policy": "generic-affine-stream",
         },
     ))
     rows.append(Row(
-        "generic-affine-fallback",
+        "generic-affine-build",
         "softmax_online",
-        "online-softmax-generic-fallback-build",
+        "online-softmax-generic-affine-build",
         kernel_cmd(
             "softmax_online",
             "build",
             {**common, "BLOCK_N": 32, "CAUSAL": 0},
-            tag="512x512/paper-softmax-online-generic-fallback-bn32",
+            tag="512x512/paper-softmax-online-generic-affine-bn32",
             machine="TriSPM",
-            env=GENERIC_AFFINE_FALLBACK_ENV,
+            env=GENERIC_AFFINE_STREAM_ENV,
         ),
         "build",
         "TriSPM",
-        "generic-fallback-build",
+        "generic-affine-build",
         paper_table=False,
         estimated_minutes=1,
         metadata={
             "source_table": "Table 5",
             "algorithm": "online",
-            "spm_policy": "generic-affine-fallback",
+            "spm_policy": "generic-affine-stream",
         },
     ))
 
@@ -879,38 +871,38 @@ def generic_affine_fallback_rows() -> list[Row]:
         "FLUSH_BEFORE_ROI": 0,
     }
     rows.append(Row(
-        "generic-affine-fallback",
+        "generic-affine-build",
         "flash_attention",
-        "flash-attention-generic-fallback-build",
+        "flash-attention-generic-affine-build",
         kernel_cmd(
             "flash_attention",
             "build",
             flash_common,
-            tag="s256_h64/paper-flash-generic-fallback-bm16-bn16",
+            tag="s256_h64/paper-flash-generic-affine-bm16-bn16",
             machine="TriSPM",
-            env=GENERIC_AFFINE_FALLBACK_ENV,
+            env=GENERIC_AFFINE_STREAM_ENV,
         ),
         "build",
         "TriSPM",
-        "generic-fallback-build",
+        "generic-affine-build",
         paper_table=False,
         estimated_minutes=1,
         metadata={
             "source_table": "Table 6",
             "algorithm": "flash_attention",
             "shape": {"SEQ": 256, "HEAD_DIM": 64},
-            "spm_policy": "generic-affine-fallback",
+            "spm_policy": "generic-affine-stream",
         },
     ))
     return rows
 
 
-def generic_affine_fallback_perf_rows() -> list[Row]:
+def generic_affine_performance_rows() -> list[Row]:
     rows: list[Row] = []
     for role, record in MATMUL_BEST.items():
         cfg = dict(record["spm"])
         params = {**record["shape"], **cfg, "CHECK_RESULT": 0}
-        generic_tag = matmul_tag(role, "generic-fallback-perf", cfg, "")
+        generic_tag = matmul_tag(role, "generic-affine-performance", cfg, "")
         cache_tag = capacity_tag(
             matmul_tag(role, "cache", dict(record["cache"]), ""),
             "32KiB",
@@ -918,22 +910,22 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
         )
         tuned_tag = matmul_tag(role, "spm", cfg, "")
         rows.append(Row(
-            "generic-affine-fallback-perf",
+            "generic-affine-performance",
             "matmul",
-            f"{role}-generic-fallback-perf",
+            f"{role}-generic-affine-performance",
             kernel_cmd(
                 "matmul",
                 "spm",
                 params,
                 tag=generic_tag,
                 machine="TriSPM",
-                env={**SPM_MATMUL_ENV, **GENERIC_AFFINE_FALLBACK_ENV},
+                env={**SPM_MATMUL_ENV, **GENERIC_AFFINE_STREAM_ENV},
             ),
             "spm",
             "TriSPM",
-            "generic-fallback-perf",
+            "generic-affine-performance",
             paper_table=False,
-            comparison="cache-vs-tuned-vs-generic-fallback",
+            comparison="cache-vs-tuned-vs-generic-affine",
             estimated_minutes=20,
             metadata={
                 "source_table": "Table 3",
@@ -944,7 +936,7 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
                 "tuned_spm_tag": tuned_tag,
                 "generic_spm_tag": generic_tag,
                 "measure_iters": 1,
-                "spm_policy": "generic-affine-fallback",
+                "spm_policy": "generic-affine-stream",
             },
         ))
 
@@ -955,8 +947,8 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
                 "SPM_ROW_BLOCK": 1, "SPM_ROW_GROUP_BLOCKS": 1,
                 "SPM_INTERNAL_ROW_BLOCK": 0,
             },
-            "512x512/paper-decoder-ln-generic-fallback-perf-rb1-rg1",
-            "decoder-ln-generic-fallback-perf",
+            "512x512/paper-decoder-ln-generic-affine-performance-rb1-rg1",
+            "decoder-ln-generic-affine-performance",
             "Table 3",
             capacity_tag("512x512/paper-decoder-ln-cache", "32KiB", "512KiB"),
             "512x512/paper-decoder-ln-spm-rb4-rg8",
@@ -967,8 +959,8 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
                 "SPM_ROW_BLOCK": 1, "SPM_ROW_GROUP_BLOCKS": 1,
                 "SPM_INTERNAL_ROW_BLOCK": 0,
             },
-            "512x512/paper-decoder-attn-softmax-generic-fallback-perf-bn32-rb1-rg1",
-            "decoder-attn-softmax-generic-fallback-perf",
+            "512x512/paper-decoder-attn-softmax-generic-affine-performance-bn32-rb1-rg1",
+            "decoder-attn-softmax-generic-affine-performance",
             "Table 3/Table 5",
             capacity_tag(
                 "512x512/paper-decoder-attn-cache-bn512",
@@ -980,7 +972,7 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
     ):
         workload = "layer_norm" if "ln" in label else "softmax"
         rows.append(Row(
-            "generic-affine-fallback-perf",
+            "generic-affine-performance",
             workload,
             label,
             kernel_cmd(
@@ -989,13 +981,13 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
                 params,
                 tag=generic_tag,
                 machine="TriSPM",
-                env=GENERIC_AFFINE_FALLBACK_ENV,
+                env=GENERIC_AFFINE_STREAM_ENV,
             ),
             "spm",
             "TriSPM",
-            "generic-fallback-perf",
+            "generic-affine-performance",
             paper_table=False,
-            comparison="cache-vs-tuned-vs-generic-fallback",
+            comparison="cache-vs-tuned-vs-generic-affine",
             estimated_minutes=8,
             metadata={
                 "source_table": source_table,
@@ -1005,29 +997,29 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
                 "tuned_spm_tag": tuned_tag,
                 "generic_spm_tag": generic_tag,
                 "measure_iters": 1,
-                "spm_policy": "generic-affine-fallback",
+                "spm_policy": "generic-affine-stream",
             },
         ))
 
     common = {"M": 512, "N": 512, "CHECK_RESULT": 0}
     rows.append(Row(
-        "generic-affine-fallback-perf",
+        "generic-affine-performance",
         "softmax",
-        "canonical-softmax-generic-fallback-perf",
+        "canonical-softmax-generic-affine-performance",
         kernel_cmd(
             "softmax",
             "spm",
             {**common, "BLOCK_N": 32, "SPM_ROW_BLOCK": 1,
              "SPM_ROW_GROUP_BLOCKS": 1, "SPM_INTERNAL_ROW_BLOCK": 0},
-            tag="512x512/paper-softmax-canonical-generic-fallback-perf-bn32-rb1-rg1",
+            tag="512x512/paper-softmax-canonical-generic-affine-performance-bn32-rb1-rg1",
             machine="TriSPM",
-            env=GENERIC_AFFINE_FALLBACK_ENV,
+            env=GENERIC_AFFINE_STREAM_ENV,
         ),
         "spm",
         "TriSPM",
-        "generic-fallback-perf",
+        "generic-affine-performance",
         paper_table=False,
-        comparison="cache-vs-tuned-vs-generic-fallback",
+        comparison="cache-vs-tuned-vs-generic-affine",
         estimated_minutes=8,
         metadata={
             "source_table": "Table 5",
@@ -1039,29 +1031,29 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
             ),
             "tuned_spm_tag": "512x512/paper-softmax-canonical-spm-bn32-rb2-rg8-exp1",
             "generic_spm_tag": (
-                "512x512/paper-softmax-canonical-generic-fallback-perf-bn32-rb1-rg1"
+                "512x512/paper-softmax-canonical-generic-affine-performance-bn32-rb1-rg1"
             ),
             "measure_iters": 1,
-            "spm_policy": "generic-affine-fallback",
+            "spm_policy": "generic-affine-stream",
         },
     ))
     rows.append(Row(
-        "generic-affine-fallback-perf",
+        "generic-affine-performance",
         "softmax_online",
-        "online-softmax-generic-fallback-perf",
+        "online-softmax-generic-affine-performance",
         kernel_cmd(
             "softmax_online",
             "spm",
             {**common, "BLOCK_N": 32, "CAUSAL": 0},
-            tag="512x512/paper-softmax-online-generic-fallback-perf-bn32",
+            tag="512x512/paper-softmax-online-generic-affine-performance-bn32",
             machine="TriSPM",
-            env=GENERIC_AFFINE_FALLBACK_ENV,
+            env=GENERIC_AFFINE_STREAM_ENV,
         ),
         "spm",
         "TriSPM",
-        "generic-fallback-perf",
+        "generic-affine-performance",
         paper_table=False,
-        comparison="cache-vs-tuned-vs-generic-fallback",
+        comparison="cache-vs-tuned-vs-generic-affine",
         estimated_minutes=8,
         metadata={
             "source_table": "Table 5",
@@ -1072,9 +1064,9 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
                 "512KiB",
             ),
             "tuned_spm_tag": "512x512/paper-softmax-online-spm-bn32",
-            "generic_spm_tag": "512x512/paper-softmax-online-generic-fallback-perf-bn32",
+            "generic_spm_tag": "512x512/paper-softmax-online-generic-affine-performance-bn32",
             "measure_iters": 1,
-            "spm_policy": "generic-affine-fallback",
+            "spm_policy": "generic-affine-stream",
         },
     ))
 
@@ -1092,22 +1084,22 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
         "FLUSH_BEFORE_ROI": 0,
     }
     rows.append(Row(
-        "generic-affine-fallback-perf",
+        "generic-affine-performance",
         "flash_attention",
-        "flash-attention-generic-fallback-perf",
+        "flash-attention-generic-affine-performance",
         kernel_cmd(
             "flash_attention",
             "spm",
             flash_common,
-            tag="s256_h64/paper-flash-generic-fallback-perf-bm16-bn16",
+            tag="s256_h64/paper-flash-generic-affine-performance-bm16-bn16",
             machine="TriSPM",
-            env=GENERIC_AFFINE_FALLBACK_ENV,
+            env=GENERIC_AFFINE_STREAM_ENV,
         ),
         "spm",
         "TriSPM",
-        "generic-fallback-perf",
+        "generic-affine-performance",
         paper_table=False,
-        comparison="cache-vs-tuned-vs-generic-fallback",
+        comparison="cache-vs-tuned-vs-generic-affine",
         estimated_minutes=60,
         metadata={
             "source_table": "Table 6",
@@ -1119,15 +1111,15 @@ def generic_affine_fallback_perf_rows() -> list[Row]:
                 "512KiB",
             ),
             "tuned_spm_tag": "s256_h64/paper-flash-spm-headkv-bm16-bn16-tail-parallel",
-            "generic_spm_tag": "s256_h64/paper-flash-generic-fallback-perf-bm16-bn16",
+            "generic_spm_tag": "s256_h64/paper-flash-generic-affine-performance-bm16-bn16",
             "measure_iters": 5,
-            "spm_policy": "generic-affine-fallback",
+            "spm_policy": "generic-affine-stream",
         },
     ))
     return rows
 
 
-def gemm_mechanism_rows() -> list[Row]:
+def gemm_tuning_rows() -> list[Row]:
     role = "ffn-down"
     shape = MATMUL_BEST[role]["shape"]
     rows: list[Row] = []
@@ -1139,7 +1131,7 @@ def gemm_mechanism_rows() -> list[Row]:
                 f"paper-mech-{role}-32x32x32-gsm1-uM{micro_m}-wK{window_k}"
             )
             rows.append(Row(
-                "gemm-tuning-mechanism",
+                "gemm-tuning",
                 "matmul",
                 f"{role}-uM{micro_m}-wK{window_k}",
                 kernel_cmd(
@@ -1164,47 +1156,11 @@ def gemm_mechanism_rows() -> list[Row]:
     return rows
 
 
-def split_rows() -> list[Row]:
-    role = "ffn-down"
-    shape = MATMUL_BEST[role]["shape"]
-    cfg = MATMUL_BEST[role]["spm"]
-    return [
-        Row(
-            "split",
-            "matmul",
-            f"{role}-no-split",
-            kernel_cmd(
-                "matmul",
-                "spm",
-                {**shape, **cfg, "CHECK_RESULT": 0},
-                env=NO_SPLIT_MATMUL_ENV,
-                tag=(
-                    f"{shape['M']}x{shape['N']}x{shape['K']}/"
-                    f"paper-split-{role}-no-split-32x32x32-gsm1"
-                ),
-                machine="TriSPM",
-            ),
-            "spm",
-            "TriSPM",
-            "mechanism-ablation",
-            paper_table=True,
-            estimated_minutes=20,
-            metadata={
-                "role": role,
-                "split": "off",
-                "micro_m": 32,
-                "window_k": 1,
-                "baseline_split_row": "gemm-tuning-mechanism ffn-down-uM8-wK4",
-            },
-        )
-    ]
-
-
-def xspm_instruction_rows() -> list[Row]:
+def graph_xspm_variant_rows() -> list[Row]:
     tag = "paper-decoder-xspm1"
     return [
         Row(
-            "xspm-instruction",
+            "graph-xspm-variant",
             "decoder_canonical_mh8",
             "large-graph-xspm1-spm-only",
             graph_spm_run_cmd("decoder_canonical_mh8", preset="large", spm_tag=tag),
@@ -1212,7 +1168,7 @@ def xspm_instruction_rows() -> list[Row]:
             "TriSPM",
             "graph-spm-run",
             paper_table=True,
-            comparison="xspm1-vs-graph-headline-mmio",
+            comparison="xspm1-vs-main-graph-result-mmio",
             estimated_minutes=80,
             env={"TRITON_USE_XSPM_INSN": "1"},
             metadata={
@@ -1221,7 +1177,7 @@ def xspm_instruction_rows() -> list[Row]:
                 "spm_tag": tag,
                 "baseline_spm_tag": "paper-decoder-best",
                 "TRITON_USE_XSPM_INSN": 1,
-                "cache_baseline": "reuse graph-headline cache/default",
+                "cache_baseline": "reuse main-graph-result cache/default",
             },
         )
     ]
@@ -1229,18 +1185,17 @@ def xspm_instruction_rows() -> list[Row]:
 
 def build_rows() -> list[Row]:
     rows: list[Row] = []
-    rows.extend(kernel_headline_rows())
-    rows.extend(graph_headline_rows())
+    rows.extend(single_kernel_results_rows())
+    rows.extend(main_graph_result_rows())
     rows.extend(graph_scale_rows())
-    rows.extend(graph_hw_sensitivity_rows())
-    rows.extend(graph_profile_rows())
-    rows.extend(softmax_fairness_rows())
-    rows.extend(attention_fairness_rows())
-    rows.extend(generic_affine_fallback_rows())
-    rows.extend(generic_affine_fallback_perf_rows())
-    rows.extend(gemm_mechanism_rows())
-    rows.extend(split_rows())
-    rows.extend(xspm_instruction_rows())
+    rows.extend(graph_hardware_sensitivity_rows())
+    rows.extend(graph_attribution_rows())
+    rows.extend(softmax_algorithm_controls_rows())
+    rows.extend(attention_algorithm_controls_rows())
+    rows.extend(generic_affine_build_rows())
+    rows.extend(generic_affine_performance_rows())
+    rows.extend(gemm_tuning_rows())
+    rows.extend(graph_xspm_variant_rows())
     return rows
 
 
@@ -1265,7 +1220,7 @@ def apply_artifact_suffix(rows: list[Row], suffix: str) -> list[Row]:
             row_suffix = row_suffix.replace("/", "-")
             if "--skip-build" in command:
                 command.remove("--skip-build")
-            if row.phase == "cache-capacity-fairness":
+            if row.phase == "graph-cache-capacity":
                 command.append("--full-compare")
             command += ["--artifact-tag", row_suffix]
             if "--spm-tag" in command:
@@ -1274,7 +1229,7 @@ def apply_artifact_suffix(rows: list[Row], suffix: str) -> list[Row]:
                 metadata["spm_tag"] = command[index]
             metadata["artifact_tag"] = row_suffix
         elif command and command[1].endswith("graph_placement.py"):
-            if row.phase == "graph-hw-sensitivity":
+            if row.phase == "graph-hardware-sensitivity":
                 row_suffix = f"{suffix}-{row.phase}-{row.workload}"
             else:
                 row_suffix = f"{suffix}-{row.phase}-{row.workload}-{row.label}"

@@ -16,7 +16,7 @@ Typical commands:
 
 ```bash
 ./scripts/paper_experiments.py --campaign paper-experiments
-./scripts/paper_experiments.py --campaign paper-experiments --phase kernel-headline --run --jobs 4
+./scripts/paper_experiments.py --campaign paper-experiments --phase single-kernel-results --run --jobs 4
 
 ./scripts/run_experiment.py matmul --mode cache --preset steady --tag example-cache
 ./scripts/run_experiment.py matmul --mode spm --preset steady --tag example-spm

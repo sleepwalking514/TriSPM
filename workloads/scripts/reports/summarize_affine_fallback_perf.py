@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize generic affine fallback gem5 performance rows."""
+"""Summarize generic affine gem5 performance rows."""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +24,7 @@ def rows_from_campaign(campaign: Path) -> list[dict[str, object]]:
     return [
         dict(row)
         for row in payload.get("rows", [])
-        if row.get("phase") == "generic-affine-fallback-perf"
+        if row.get("phase") == "generic-affine-performance"
     ]
 
 

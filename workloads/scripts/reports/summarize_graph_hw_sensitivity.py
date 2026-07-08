@@ -2,7 +2,7 @@
 """Summarize decoder MH8 hardware-sensitivity rows against default SPM.
 
 This is a postprocess-only helper.  It reads the ROI stats produced by
-the `graph-hw-sensitivity` phase in paper_experiments.py and treats
+the `graph-hardware-sensitivity` phase in paper_experiments.py and treats
 paper-hw-default as the denominator.
 """
 from __future__ import annotations

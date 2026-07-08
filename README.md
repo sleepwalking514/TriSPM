@@ -16,20 +16,21 @@ The public repository ties together three pieces:
 
 ## Scope
 
-TriSPM is not a general-purpose scratchpad allocator and it is not primarily a
-collection of hand-written DMA kernels.  The compiler targets analyzable tensor
-IR regions and leaves unsupported or unprofitable regions on the cache path.
+TriSPM extends the Triton CPU compilation flow with compiler-managed scratchpad
+promotion for RVV tensor programs.  The compiler analyzes bounded tensor
+regions in lowered Triton CPU IR, promotes profitable tiles and temporaries to
+SPM, inserts DMA/wait operations, and leaves unsupported accesses on the
+ordinary cache path.
 
-Currently covered footprint classes include:
+The artifact covers the access patterns evaluated in the paper:
 
-- GEMM-like contraction reuse.
-- Multi-pass row residency for normalization and canonical softmax-style row
-  reductions.
-- Derived-value residency for canonical softmax `exp(x - max)` reuse.
-- Conservative generic affine-tile promotion for static full-tile transfers.
+- Contraction tile reuse for GEMM-like operators.
+- Multi-pass row reuse for LayerNorm and canonical Softmax.
+- Temporary-value reuse such as cached `exp(x - max)` in Softmax.
+- Generic affine-tile streaming for static full-tile transfers.
 
-Promotion records and rejection reasons are part of the artifact contract:
-rejected candidates document the conservative fallback behavior.
+Graph-visible tensors remain ordinary cache-coherent tensors between operators;
+TriSPM applies SPM promotion inside admitted kernel scopes.
 
 ## Checkout
 
@@ -55,10 +56,11 @@ TriSPM gem5 fork.  A working setup needs:
 - A built Triton/LLVM tree, with `llc` available at
   `compiler/llvm-project/build/bin/llc`.
 - A built RISCV gem5 binary at `simulator/build/RISCV/gem5.opt`.
-- A RISC-V cross-compilation toolchain with Clang and a sysroot.
+- A RISC-V cross-compilation toolchain with Clang and a target sysroot.
 
 `RISCV_TOOLCHAIN_ROOT` must point at the RISC-V toolchain root.  The workload
-scripts expect this layout:
+scripts derive both `clang` and `--sysroot` from this root, so no separate
+`SYSROOT` variable is required.  The expected layout is:
 
 ```text
 $RISCV_TOOLCHAIN_ROOT/bin/clang
@@ -96,13 +98,13 @@ The common filters are:
 - `--label`: include rows whose label contains this substring, repeatable.
 - `--jobs`: run multiple independent rows concurrently.
 
-For example, run only the kernel headline phase:
+For example, run only the single-kernel results phase:
 
 ```bash
 cd workloads
 ./scripts/paper_experiments.py \
   --campaign paper-experiments \
-  --phase kernel-headline \
+  --phase single-kernel-results \
   --run \
   --jobs 4
 ```
@@ -121,19 +123,18 @@ cd workloads
 
 Useful phases include:
 
-- `kernel-headline`
-- `graph-headline`
+- `single-kernel-results`
+- `main-graph-result`
 - `graph-scale`
-- `graph-hw-sensitivity`
-- `graph-profile`
-- `softmax-fairness`
-- `attention-algorithm-fairness`
-- `generic-affine-fallback`
-- `generic-affine-fallback-perf`
-- `gemm-tuning-mechanism`
-- `split`
-- `cache-capacity-fairness`
-- `xspm-instruction`
+- `graph-hardware-sensitivity`
+- `graph-attribution`
+- `softmax-algorithm-controls`
+- `attention-algorithm-controls`
+- `generic-affine-build`
+- `generic-affine-performance`
+- `gemm-tuning`
+- `graph-cache-capacity`
+- `graph-xspm-variant`
 
 For individual kernels:
 
